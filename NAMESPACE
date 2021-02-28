@@ -1,0 +1,10 @@
+exportPattern("^[[:alpha:]]+")
+# import(utilsFanc)
+# import(Seurat)
+import(ggplot2)
+# import(patchwork)
+# import(cowplot) # seurat already imports patchwork and cowplot
+import(parallel)
+import(data.table)
+import(future)
+
