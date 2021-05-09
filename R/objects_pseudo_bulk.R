@@ -22,10 +22,18 @@ rowname.shffl <- function(df, direction, which.col, keep, ...) {
 # }
 
 
-so.2.bulk <- function(so, assay, slot, cells=NULL, ident, sub.idents, 
-                      group.by, groups = NULL, take.mean = F, 
+so.2.bulk <- function(so, assay, slot, cells=NULL, genes = NULL, ident, sub.idents, 
+                      group.by= NULL, groups = NULL, take.mean = F, binarize = F,
                       coldata.columns = NULL, debug = F) {
-  meta.df <- so@meta.data %>% utilsFanc::change.name.fanc(cols.from = group.by, cols.to = "tgroup")
+  warning("so.2.bulk function is intended to give you bulk for one cluster. if you give more " %>% 
+            paste0("clusters in sub.idents, it will just pile these clusters together"))
+  meta.df <- so@meta.data
+  if (is.null(group.by)) {
+    group.by <- "miao"
+    meta.df$miao <- "wang"
+  }
+  
+  meta.df <- meta.df %>% utilsFanc::change.name.fanc(cols.from = group.by, cols.to = "tgroup")
   if (is.null(coldata.columns)) {
     meta.df[, group.by] <- meta.df$tgroup
     coldata.columns <- group.by
@@ -40,6 +48,13 @@ so.2.bulk <- function(so, assay, slot, cells=NULL, ident, sub.idents,
   meta.df <- meta.df %>% .[.$cell.id %in% cells,]
   
   exp.df <- GetAssayData(object = so, slot = slot, assay = assay)
+  if (binarize == T) {
+    exp.df[exp.df > 0] <- 1
+    exp.df[exp.df <= 0] <- 0
+  }
+    
+  if (!is.null(genes))
+    exp.df <- exp.df[genes, ]
   exp.df <- exp.df[, colnames(exp.df) %in% cells] %>% 
     as.matrix() %>% t() %>% as.data.frame()
   exp.df$cell.id <- exp.df %>% rownames()
@@ -55,7 +70,8 @@ so.2.bulk <- function(so, assay, slot, cells=NULL, ident, sub.idents,
   ########
   
   bulk.mat <- exp.df %>% Matrix.utils::aggregate.Matrix(.,groupings = .$tgroup, fun = "sum") %>% t()
-  bulk.mat <- bulk.mat[rownames(bulk.mat) != "tgroup",]
+  # browser()
+  bulk.mat <- bulk.mat[rownames(bulk.mat) != "tgroup",,drop=F]
   if (take.mean == T) {
     cell.number.df <- meta.df %>% group_by(tgroup) %>% summarise(n = n())
     for (i in 1:nrow(cell.number.df)) {
@@ -79,6 +95,120 @@ so.2.bulk <- function(so, assay, slot, cells=NULL, ident, sub.idents,
   
 }
 
+# so.2.bulk.fast <- function(so, assay, slot, cells= NULL, genes, cluster.ident, clusters,
+#                            group.by=NULL, groups=NULL) {
+#   # this function will not separate each clusters in "clusters". They will be merged
+#   if (is.null(cells)) {
+#     cells <- 
+#   }
+#   
+#   mat <- GetAssayData(so, assay = assay, slot = slot)
+#   
+# }
+
+ao.2.bulk <- function(ao=NULL, cell.list = NULL, gr = NULL, gr.sample.cols =NULL, peakmat = NULL,
+                      coldata.columns = NULL, coldata.df = NULL,
+                      pseudo, seed = NULL, nprep = 2,
+                      cluster.ident, cluster, group.ident, groups=NULL) {
+  if (pseudo != T)
+    stop("getting coldata from non-pseudo based setting is not yet developed")
+  
+  if (is.null(gr)) {
+    if (is.null(cell.list)) {
+      
+      if (length(cluster) > 1)
+        stop("ao.2.bulk currently only handle 1 cluster")
+      cell.list <- archr.get.cells.grid(ao = ao, cluster.ident = cluster.ident, clusters = cluster,
+                                        group.ident = group.ident, groups = groups, melt = T, 
+                                        seed = seed, pseudo.gen = pseudo, nprep = nprep)
+      names(cell.list) <- names(cell.list) %>% sub(paste0(cluster.ident, "_", cluster, ".."), "", .)
+      # if (is.null(coldata.columns) && is.null(coldata.df) && pseudo == F) {
+      #   getCellColData()
+      # }
+    }
+    
+    gr.sample.cols <- names(cell.list)
+    if (is.null(peakmat))
+      stop("peakmat must be specified when gr is not")
+    gr <- vectorization.core(cell.list = cell.list, ao = ao, mat = peakmat, mat.name = "PeakMatrix", 
+                             deseq2.norm = F)
+  }
+  
+  if (pseudo == T && is.null(coldata.df)) {
+    coldata.df <- data.frame(sample = sub("..prep.*$", "", gr.sample.cols))
+    rownames(coldata.df) <- gr.sample.cols
+  }
+  
+  # from gr to DESeq2 format:
+  df <- gr %>% `names<-`(NULL) %>% as.data.frame() %>% .[, c("seqnames", "start", "end", gr.sample.cols)] %>% 
+    mutate(peak = paste0(seqnames, ":", start, "-", end)) 
+  rownames(df) <- df$peak
+  mat <- df[, gr.sample.cols] %>% as.matrix()
+  return(list(bulk.mat = mat, coldata = coldata.df, gr = gr))
+}
+
+t.f.a2b.da <- function(a2b.list, use.peakwatch=F, p.adj.cutoff, p.cutoff, 
+                       comp, lfc.cutoff,
+                       plot.out.root) {
+  sample.y <- sub(":.+$", "", comp)
+  sample.x <- sub("^.+:", "", comp)
+  system(paste0("mkdir -p ", dirname(plot.out.root)))
+  p.list <- lapply(seq_along(a2b.list), function(i) {
+    a2b <- a2b.list[[i]]
+    name <- names(a2b.list)[i]
+    if (use.peakwatch == T) {
+      if (is.null(a2b$peakwatch )) {
+        stop("peakwatch object is not existent")
+      }
+      hl.list <- a2b$peakwatch %>% split(f = a2b$peakwatch$stratify) %>% 
+        lapply(function(x) return(x$gene))
+    } else {
+      hl <- a2b$res.exp %>% filter(pvalue < p.cutoff, padj < p.adj.cutoff, abs(log2FoldChange) > lfc.cutoff) %>%
+        pull(gene)
+      hl.list <- list(hl)
+    }
+    p.list <- lapply(seq_along(hl.list), function(i) {
+      hl <- hl.list[[i]]
+      stratify <- names(hl.list)[i]
+      p <- xy.plot(df = a2b$bulkNorm, x = paste0("bulkNorm_", sample.x), y = paste0("bulkNorm_", sample.y), 
+                   highlight.var = "gene", highlight.values = hl) +
+        ggtitle(paste0(name, ", ",stratify))
+      # browser()
+      return(p)
+    })
+    return(p.list)
+  }) %>% Reduce(c,.)
+  if (use.peakwatch == T) {
+    plot.out <- paste0(plot.out.root, "..peakwatch", ".png")
+  } else {
+    plot.out <- paste0(plot.out.root, "..", "p_", p.cutoff, "..padj_", p.adj.cutoff,
+                       "..lfc_", lfc.cutoff, ".png")
+  }
+  trash <- wrap.plots.fanc(p.list, plot.out = plot.out)
+  return()
+}
+
+ao.2.bulk.list <- function(ao, peakmat, pseudo,
+                           cluster.ident, clusters = NULL, group.ident, groups = NULL, threads = 6,
+                           design.formula, contrast, work.dir, plot.dir = NULL) {
+  if (is.null(clusters)) {
+    clusters <- getCellColData(ao, select = cluster.ident)[, cluster.ident] %>% unique() %>% 
+      gtools::mixedsort()
+  }
+  a2b.list <- mclapply(clusters, function(cluster){
+    a2b <- ao.2.bulk(ao = ao, peakmat = peakmat, pseudo = pseudo, cluster.ident = cluster.ident,
+                     cluster = cluster, group.ident = group.ident, groups = groups)
+    a2b <- s2b.deseq(s2b.obj = a2b, design = design.formula, contrast = contrast, try.hm = F,
+                     force.hm = F, force = F)
+    return(a2b)
+  }, mc.cores = threads, mc.cleanup = T)
+  # browser()
+  names(a2b.list) <- paste0(cluster.ident, "_",clusters)
+  saveRDS(a2b.list, paste0(work.dir, "/ao.bulk.list.Rds"))
+  return(a2b.list)
+}
+  
+  
 s2b.deseq <- function(s2b.obj, design, contrast=NULL, try.hm = T, force.hm = F,
                       force = F, sample.order = NULL, outlist = NULL, single.sample = F,
                       p.adj.cutoff, p.cutoff, title = character(0), pivots = NULL) {
@@ -89,27 +219,35 @@ s2b.deseq <- function(s2b.obj, design, contrast=NULL, try.hm = T, force.hm = F,
   
   if (single.sample == T) {
     dds <- DESeq2::estimateSizeFactors(dds, type = "ratio")
-    s2b.obj[["dds"]]  <- dds
-    counts <- SummarizedExperiment::assay(dds) %>% as.matrix()
-    norm.counts <- counts %*% diag((1/dds@colData$sizeFactor))
-    df <- as.data.frame(norm.counts)
-    colnames(df) <- as.character(dds@colData$sample) 
-    
-    df$fc <- (df[, contrast[2]]/df[, contrast[3]]) %>% format(digits = 3)
-    colnames(df) <- colnames(df) %>% paste0("bulkNorm_", .)
-    df$gene <- rownames(df)
-    rownames(df) <- NULL
-    s2b.obj[["bulkNorm"]] <- df
-    
-    return(s2b.obj)
+  } else {
+    dds <- DESeq2::DESeq(dds, test = "Wald", fitType = "local", sfType = "ratio") 
   }
-  dds <- DESeq2::DESeq(dds, test = "Wald", fitType = "local", sfType = "ratio")
-  
   s2b.obj[["dds"]]  <- dds
+  # counts <- SummarizedExperiment::assay(dds) %>% as.matrix()
+  # norm.counts <- counts %*% diag((1/dds@colData$sizeFactor))
+  # df <- as.data.frame(norm.counts)
+  # colnames(df) <- as.character(dds@colData$sample) 
+  df <- DESeq2::counts(object = dds, normalized = T) %>% as.data.frame()
+  # merge pseudo replicates if there are any:
+  for (i in 2:3) {
+    df[, contrast[i]] <- df[, grepl(paste0(contrast[i], "..prep"), colnames(df))] %>% rowSums()
+  }
+ 
+  df$fc <- (df[, contrast[2]]/df[, contrast[3]]) %>% format(digits = 3)
+  
+  colnames(df) <- colnames(df) %>% paste0("bulkNorm_", .)
+  df$gene <- rownames(df)
+  rownames(df) <- NULL
+  s2b.obj[["bulkNorm"]] <- df
+  
+  if (single.sample == T)
+    return(s2b.obj)
+  
   if (!is.null(contrast)) {
     s2b.obj[["res"]] <- DESeq2::results(object = dds, contrast = contrast)
     # res.exp means "result.expanded"
     s2b.obj[["res.exp"]] <- deseq2.add.value(dds=s2b.obj$dds, res=s2b.obj$res, sample.order = sample.order)
+    rownames(s2b.obj[["res.exp"]]) <- NULL
     if (try.hm == T) {
       plot.expr <- expression(exp.hm(
         res.exp = s2b.obj[["res.exp"]], outlist = outlist, 
@@ -336,4 +474,46 @@ bulk.list <- function(so, cluster.ident = "seurat_clusters", clusters = NULL,
   names(bulk.all.list) <- paste0(cluster.ident, "_", clusters)
   saveRDS(bulk.all.list, paste0(work.dir, "/bulk.list.Rds"))
   return(bulk.all.list)
+}
+
+aggregate.fanc <- function(mat, margin, groupings, binarize = F, take.mean = F, sort = F) {
+  ### groupings: must be a named vector. the names are the colnames or rownames. mat will be 
+  #rearranged to match the sequence of groupings
+  if (is.factor(groupings)) {
+    names <- names(groupings)
+    groupings <- as.character(groupings)
+    names(groupings) <- names
+  }
+  
+  if (sort == T) {
+    groupings <- gtools::mixedsort(groupings)
+  }
+  # mat <- GetAssayData(object = soi.clean.WT, slot = "counts", assay = "RNA")
+  if (margin == 2) {
+    mat <- Matrix::t(mat)
+  } else if (margin != 1) {
+    stop("margin has to be 1 or 2")
+  }
+  
+  mat <- mat[names(groupings), ]
+  if (binarize == T) {
+    mat[mat > 0] <- 1
+    mat[mat <= 0] <- 0
+  }
+  aggr <- Matrix.utils::aggregate.Matrix(mat, groupings = groupings, fun = "sum")
+  if (sort == T) {
+    aggr <- aggr[gtools::mixedsort(rownames(aggr)),]
+  }
+  
+  if (take.mean == T) {
+    n <- table(groupings)[rownames(aggr)]
+    names <- dimnames(aggr)
+    aggr <- diag(1/n) %*% aggr
+    dimnames(aggr) <- names
+  }
+  
+  if (margin == 2) {
+    aggr <- Matrix::t(aggr)
+  }
+  return(aggr)
 }

@@ -145,52 +145,79 @@ archr.cluster.pipe <- function(ao, so = NULL, work.dir, plot.dir = NULL, do.harm
 }
 
 
-archr.macs2.pipe <- function(ao, work.dir, peak.annot = "homer") {
+archr.macs2.pipe <- function(ao, work.dir, cluster.ident = "seurat_clusters", peak.annot = "homer",
+                             add.coverage = T, add.peakset = T, add.peakmat = T, get.peakmat = T, add.motifanno = T) {
   system(paste0("mkdir -p ", work.dir))
+  if (add.coverage == T) {
+    ao <- addGroupCoverages(ArchRProj = ao, groupBy = cluster.ident)
+    saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  }
   
-  ao <- addGroupCoverages(ArchRProj = ao, groupBy = "seurat_clusters")
+  if (add.peakset == T) {
+    ao <- addReproduciblePeakSet(
+      ArchRProj = ao, 
+      groupBy = cluster.ident, 
+      pathToMacs2 = "/opt/apps/python2/bin/macs2"
+    )
+    
+    saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  }
+
+  if (add.peakmat == T) {
+    ao <- addPeakMatrix(ao)
+    saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  }
   
-  ao <- addReproduciblePeakSet(
-    ArchRProj = ao, 
-    groupBy = "seurat_clusters", 
-    pathToMacs2 = "/opt/apps/python2/bin/macs2"
-  )
+  if (get.peakmat == T) {
+    peakmat <- archr.get.peak.mat(ao, mat.name = "PeakMatrix", return.full = T)
+    saveRDS(peakmat, paste0(work.dir, "/peakmat.Rds"))
+  }
   
-  saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  if (add.motifanno == T) {
+    ao <- addMotifAnnotations(ArchRProj = ao, motifSet = peak.annot, name = peak.annot)
+    saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  }
   
-  ao <- addPeakMatrix(ao)
-  
-  ao <- addMotifAnnotations(ArchRProj = ao, motifSet = peak.annot, name = peak.annot)
   
 
-  saveRDS(ao, paste0(work.dir, "/ao.Rds"))
+  # saveRDS(ao, paste0(work.dir, "/ao.Rds"))
   
   return(ao)
   
 }
 
-archr.hm.pipe <- function(ao, work.dir, plot.marker.peaks=T, plot.motif=T, peak.annot = "homer",
-                          marker.width = 500, marker.height = 600, motif.width = 600 , motif.height = 700, 
+archr.hm.pipe <- function(ao, ao.markersPeaks = NULL, cluster.ident = "seurat_clusters", work.dir, plot.marker.peaks=T, plot.motif=T, peak.annot = "homer",
+                          marker.width = 700, marker.height = 600, motif.width = 600 , motif.height = 700, 
                           motif.n = 7, motif.pmax = 50, 
                           plot.dir = NULL) {
   if (is.null(plot.dir))
     plot.dir <- paste0(work.dir, "/Plots")
   system(paste0("mkdir -p ", work.dir, " ", plot.dir))
   
-  ao.markersPeaks <- getMarkerFeatures(
-    ArchRProj = ao, 
-    useMatrix = "PeakMatrix", 
-    groupBy = "seurat_clusters",
-    bias = c("TSSEnrichment", "log10(nFrags)"),
-    testMethod = "wilcoxon"
-  )
+  if (is.null(ao.markersPeaks)) {
+    ao.markersPeaks <- getMarkerFeatures(
+      ArchRProj = ao, 
+      useMatrix = "PeakMatrix", 
+      groupBy = cluster.ident,
+      bias = c("TSSEnrichment", "log10(nFrags)"),
+      testMethod = "wilcoxon"
+    )
+    saveRDS(ao.markersPeaks, paste0(work.dir, "/marker_peaks_", Sys.time() %>% sub(" ", "_",.), ".Rds"))
+  } else {
+    if (is.character(ao.markersPeaks))
+      ao.markersPeaks <- readRDS(ao.markersPeaks)
+  }
+
   
   if (plot.marker.peaks == T) {
     utilsFanc::t.stat("preparing to plot marker peaks")
-    ao.heatmapPeaks <- markerHeatmap(
+    ao.heatmapPeaks <- plotMarkerHeatmap(
       seMarker = ao.markersPeaks, 
       cutOff = "FDR <= 0.1 & Log2FC >= 0.5",
-      transpose = F
+      transpose = F, 
+      labelRows = F,# , nLabel = 0, nPrint = 1
+      labelMarkers = NULL,
+      nLabel = 1
     )
     
     png(filename = paste0(plot.dir, "/hm_marker_peaks.png"),

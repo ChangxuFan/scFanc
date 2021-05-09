@@ -17,7 +17,9 @@ chr.sort2mixsort <- function(x) {
   return(order)
   
 }
-archr.get.frag <- function(obj, cellNames, return.df = F, out.bed = NULL, return.grange = F, ...) {
+archr.get.frag <- function(obj, cellNames, n.frag = NULL, seed = 42,  return.df = F, out.bed = NULL,
+                           out.bdg = NULL, ext.left = 75, ext.right = 75,
+                           return.grange = F, ...) {
   rhdf5::h5disableFileLocking()
   arrow.file <- ArchR::getArrowFiles(obj)
   
@@ -54,13 +56,47 @@ archr.get.frag <- function(obj, cellNames, return.df = F, out.bed = NULL, return
     reshape2::melt(id.vars = c("seqnames", "RG", "pseudo.umi"),
                    measure.vars = c("start", "end"),
                    variable.name = ("start.end"),
-                   value.name = "left") %>% 
-    mutate(right = left + 1, strand = "+") %>% 
-    dplyr::select(seqnames, left, right, RG, pseudo.umi, strand) %>% 
-    arrange(RG, seqnames, left)
+                   value.name = "start") %>% 
+    mutate(end = start + 1, strand = "+") %>% 
+    dplyr::select(seqnames, start, end, RG, pseudo.umi, strand) %>% 
+    arrange(RG, seqnames, start)
+  if (!is.null(n.frag)) {
+    if (n.frag >= nrow(df.insert)) {
+      n.frag <- nrow(df.insert)
+      warning("requesting more fragments than available")
+    }
+    set.seed(seed = seed)
+    df.insert <- df.insert[sample(1:nrow(df.insert), n.frag, replace = F), ]
+  }
   if (!is.null(out.bed)) {
     system(paste0("mkdir -p ", dirname(out.bed)))
     write.table(df.insert, out.bed, sep = "\t", quote = F, col.names = F, row.names = F)
+  }
+  if (!is.null(out.bdg)) {
+    system(paste0("mkdir -p ", dirname(out.bdg)))
+    # browser()
+    gr.insert.ext <- df.insert %>% mutate(start = pmax(1, start - ext.left), end = end + ext.right) %>% 
+      makeGRangesFromDataFrame()
+    cov <- GenomicRanges::coverage(gr.insert.ext)
+    cov <- cov[sort(names(cov))]
+    bdg <- lapply(names(cov), function(chr) {
+      rle <- cov[[chr]]
+      bdg <- data.frame(chr = chr, start = start(rle) - 1, end = end(rle), score = runValue(rle)) %>% 
+        filter(score > 0)
+      return(bdg)
+    }) # %>% Reduce(rbind, .)
+    # bdg <- Reduce(rbind, bdg)
+    
+    for (i in length(bdg)) {
+      if (i == 1)
+        append <- F
+      else
+        append <- T
+      readr::write_tsv(bdg[[i]], out.bdg, col_names = F, append = append)
+    }
+    
+    
+    
   }
   # if (return.grange==T)
   #   return(frags)
@@ -70,7 +106,108 @@ archr.get.frag <- function(obj, cellNames, return.df = F, out.bed = NULL, return
 }
 
 
-serial.macs2 <- function(obj, cellNames.list, sub.names= NULL,master.dir, root.name  = NULL, genome,
+
+
+insert.2.bdg <- function(in.bed, genome, left.ext = 75, right.ext = 75, 
+                         ext.bed = NULL, out.bdg = NULL, 
+                         bedtools = "/bar/cfan/anaconda2/envs/jupyter/bin/bedtools") {
+  stop("this function is too slow")
+  genome <- paste0("/bar/cfan/genomes/", genome, "/", genome, ".chrom.sizes")
+  if (is.null(ext.bed))
+    ext.bed <- sub(".bed$", ".ext.bed", in.bed)
+  if (is.null(out.bdg))
+    out.bdg <- sub(".bed$", ".ext.bedgraph", in.bed)
+  
+  if (is.character(in.bed))
+    in.bed <- read.table(in.bed, as.is = T, header = F, quote = "")
+  
+  ext.df <- in.bed
+  ext.df[, 2] <- pmax(0, ext.df[, 2] - left.ext)
+  ext.df[, 3] <- ext.df[, 3] + right.ext
+  
+  utilsFanc::write.zip.fanc(ext.df, ext.bed, bed.shift = F, zip = T)
+  cmd <- paste0(bedtools, " genomecov -bg -i ",ext.bed, "-g ", genome, " > ", out.bdg)
+  system(cmd)
+  return(out.bdg)
+}
+
+serial.macs2 <- function(obj, cellNames.list, n.frag.vec = NULL, sub.names= NULL,master.dir, root.name  = NULL, genome,
+                         get.bed = T, run.macs2 = T, get.bdg = T,
+                         thread.master, thread.sub=2, spmr = F, ...) {
+  rhdf5::h5disableFileLocking()
+  if (is.null(root.name)) 
+    root.name <- names(cellNames.list)
+  
+  if (length(root.name) == 1)
+    root.name <- rep(root.name, length(cellNames.list))
+  
+  if (grepl("mm", genome))
+    genome <- "mm"
+  if (grepl("hg", genome))
+    genome <- "hs"
+  # first get all the bed 
+  if (!is.null(sub.names)) {
+    if (length(cellNames.list) != length(sub.names))
+      stop("sub.names, if provided, must be of the same length as cellNames.list")
+    
+  } else {
+    lengths <- sapply(cellNames.list, length)
+    sub.n <- rep(1, length(cellNames.list))
+    
+    if (length(sub.n) > 1) {
+      for (i in 2:length(sub.n)) {
+        if (lengths[i] == lengths[i-1])
+          sub.n[i] <-  sub.n[i-1]+1
+      }
+    }
+    
+    
+    sub.names <- paste0(lengths, "_rep_", sub.n)
+  }
+  system(paste0("mkdir -p ", master.dir))
+  # browser()
+  
+  jsongen <- mclapply(seq_along(cellNames.list), function(i) {
+    n.frag <- n.frag.vec[i]
+    x <- cellNames.list[[i]]
+    sub.name <- sub.names[i]
+    sub.root.name <- paste0(root.name[i], "_", sub.name)
+    sub.dir <- paste0(master.dir, "/", sub.root.name, "/")
+    raw.bed <- paste0(sub.dir, "/", sub.root.name, ".bed")
+    bdg <- sub(".bed$", ".ext.bedgraph", raw.bed)
+    if (get.bed == T)
+      archr.get.frag(obj = obj, cellNames = x, out.bed = raw.bed, n.frag = n.frag.vec)
+    else if (get.bdg == T) {
+      archr.get.frag(obj = obj, cellNames = x, out.bdg = bdg)
+    }
+    if (run.macs2 == T)
+      rnaSeqFanc::macs2.atac.callpeak(infile = raw.bed, root.name = sub.root.name, 
+                                      outdir = sub.dir, format = "BED", genome = genome, 
+                                      q.cutoff = 0.1, shift = -75, ext = 150, spmr = spmr, subsummit = F, 
+                                      bdgcmp = T, bdgcmp.method = "ppois", zip = T, 
+                                      write.log = T,
+                                      thread = thread.sub, run=T)
+    jsongen <- data.frame(name = paste0(sub.root.name, c("_treat_pileup.bdg.gz", "_control_lambda.bdg.gz",
+                                                         "_ppois.bdg.gz", "_peaks.narrowPeak.gz")),
+                          type = c("bedGraph", "bedGraph", "bedGraph", "bed"))
+    jsongen$url <- jsongen$name %>% paste0(sub.root.name, "/", .)
+    return(jsongen)
+  }, mc.cores = thread.master) %>% Reduce(rbind, .)
+  json <- jsongen %>% jsonlite::toJSON() %>% jsonlite::prettify()
+  write(json, paste0(master.dir, "/macs_tracks.json"))
+  
+  narrowpeaks <- lapply(jsongen$url, function(x) {
+    read.table(x %>% sub(".gz", "", .) %>% paste0(master.dir, "/",.), as.is=T) %>% 
+      return()
+  })
+  
+  names(narrowpeaks) <- jsongen$name
+  return(narrowpeaks)
+}
+
+
+
+serial.macs2.2 <- function(obj, cellNames.list, sub.names= NULL,master.dir, root.name  = NULL, genome,
                          get.bed = T, run.macs2 = T,
                          thread.master, thread.sub=2, spmr = F, ...) {
   rhdf5::h5disableFileLocking()
@@ -99,12 +236,18 @@ serial.macs2 <- function(obj, cellNames.list, sub.names= NULL,master.dir, root.n
           sub.n[i] <-  sub.n[i-1]+1
       }
     }
-
+    
     
     sub.names <- paste0(lengths, "_rep_", sub.n)
   }
   system(paste0("mkdir -p ", master.dir))
   
+  
+  browser()
+  
+  archr.get.frag.m(obj = obj, cell.list = cellNames.list, 
+                   out.bdg.files = paste0(master.dir, "/", root.name, "_", sub.names, 
+                                          "/", root.name, "_", sub.names, ".bedgraph"))
   
   jsongen <- mclapply(seq_along(cellNames.list), function(i) {
     x <- cellNames.list[[i]]
@@ -112,32 +255,30 @@ serial.macs2 <- function(obj, cellNames.list, sub.names= NULL,master.dir, root.n
     sub.root.name <- paste0(root.name[i], "_", sub.name)
     sub.dir <- paste0(master.dir, "/", sub.root.name, "/")
     raw.bed <- paste0(sub.dir, "/", sub.root.name, ".bed")
-    if (get.bed == T)
+    if (get.bed == T) {
       archr.get.frag(obj = obj, cellNames = x, out.bed = raw.bed)
-    if (run.macs2 == T)
-      rnaSeqFanc::macs2.atac.callpeak(infile = raw.bed, root.name = sub.root.name, 
-                                      outdir = sub.dir, format = "BED", genome = genome, 
-                                      q.cutoff = 0.1, shift = -75, ext = 150, spmr = spmr, subsummit = F, 
-                                      bdgcmp = T, bdgcmp.method = "ppois", zip = T, 
-                                      write.log = T,
-                                      thread = thread.sub, run=T)
-    jsongen <- data.frame(name = paste0(sub.root.name, c("_treat_pileup.bdg.gz", "_control_lambda.bdg.gz",
-                                                         "_ppois.bdg.gz", "_peaks.narrowPeak.gz")),
-                          type = c("bedGraph", "bedGraph", "bedGraph", "bed"))
-    jsongen$url <- jsongen$name %>% paste0(sub.root.name, "/", .)
-    return(jsongen)
+      if (run.macs2 == T) {
+        rnaSeqFancLite::macs2.atac.callpeak(infile = raw.bed, root.name = sub.root.name, 
+                                            outdir = sub.dir, format = "BED", genome = genome, 
+                                            q.cutoff = 0.1, shift = -75, ext = 150, spmr = spmr, subsummit = F, 
+                                            bdgcmp = T, bdgcmp.method = "ppois", zip = T, 
+                                            write.log = T,
+                                            thread = thread.sub, run=T)
+        jsongen <- data.frame(name = paste0(sub.root.name, c("_treat_pileup.bdg.gz", "_control_lambda.bdg.gz",
+                                                             "_ppois.bdg.gz", "_peaks.narrowPeak.gz")),
+                              type = c("bedGraph", "bedGraph", "bedGraph", "bed"))
+        jsongen$url <- jsongen$name %>% paste0(sub.root.name, "/", .)
+        return(jsongen)
+      }
+      
+    }
   }, mc.cores = thread.master) %>% Reduce(rbind, .)
   json <- jsongen %>% jsonlite::toJSON() %>% jsonlite::prettify()
   write(json, paste0(master.dir, "/macs_tracks.json"))
   
-  narrowpeaks <- lapply(jsongen$url, function(x) {
-    read.table(x %>% sub(".gz", "", .) %>% paste0(master.dir, "/",.), as.is=T) %>% 
-      return()
-  })
-  
-  names(narrowpeaks) <- jsongen$name
-  return(narrowpeaks)
 }
+
+  
 
 seurat.plot.archr <- function(so, ao, ao.embedding, ao.colorBy, ao.name, plot.dir, 
                               width = 10, height = 10, ...) {
@@ -180,19 +321,21 @@ seurat.plot.archr.2 <- function(so, ao, ao.embedding, ao.plot.list, ao.name, plo
  
  
 } 
-archr.get.peak.mat <- function(ao, mat.name = "PeakMatrix") {
+archr.get.peak.mat <- function(ao, mat.name = "PeakMatrix", return.full = F) {
   #stop("untested")
   mat <- ArchR::getMatrixFromProject(ao, useMatrix = mat.name)
   # stop("need to add sort2mixedsort")
   
   order <- chr.sort2mixsort(x = rowData(mat)$idx)
   mat <- mat[order, ]
-  mat <- assay(mat)
+  if (return.full == F)
+    mat <- assay(mat)
   return(mat)
 }
 
 # t <- ArchR::getCellColData(ao.int.prog,drop = F)
-archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, groups = NULL, melt =T) {
+archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, groups = NULL,
+                                 melt =T, pseudo.gen = F, seed = NULL, nprep = 2) {
   df <- ArchR::getCellColData(ao,drop = F, select = c(cluster.ident, group.ident)) %>% 
     as.data.frame() %>%  factor2character.fanc() 
   if (!is.null(clusters))
@@ -208,6 +351,18 @@ archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, 
           cells <- rownames(group.df)
           return(cells)
         })
+      # browser()
+      if (pseudo.gen == T) {
+        cell.list.cl <- lapply(seq_along(cell.list.cl), function(i) {
+          cells <- cell.list.cl[[i]]
+          name <- names(cell.list.cl)[i]
+          set.seed(seed = seed)
+          split.id <- sample(1:nprep, size = length(cells), replace = T)
+          cells.prep <- cells %>% split(f = split.id)
+          names(cells.prep) <- paste0(name, "..prep_", 1:length(cells.prep))
+          return(cells.prep)
+        }) %>% Reduce(c, .)
+      }
       names(cell.list.cl) <- paste0(cluster.ident, "_",cl, "..", names(cell.list.cl))
       return(cell.list.cl)
     })
@@ -330,7 +485,9 @@ per.cluster.macs2 <- function(so, ao, meta, sort=F, subset = NULL, group.by=NULL
           lapply(function(y) {
             return(y[,"cells"])
           })
+        
         names(cells.by.group) <- paste0(meta.value, "_",names(cells.by.group))
+        
       } else {
         cells.by.group <- list(x[, "cells"])
         names(cells.by.group) <- meta.value
@@ -342,6 +499,73 @@ per.cluster.macs2 <- function(so, ao, meta, sort=F, subset = NULL, group.by=NULL
   cell.list <- Reduce(c, cell.list)
   
   trash <- serial.macs2(obj = ao, cellNames.list = cell.list, genome = genome,
+                        master.dir = master.dir, root.name = names(cell.list), 
+                        get.bed = get.bed, thread.master = thread.master, thread.sub = thread.sub, spmr = spmr, run.macs2 = run)
+  
+  return(cell.list)
+}
+
+per.cluster.macs2.2 <- function(so=NULL, ao, meta, meta.is.ao = F, sort=F, subset = NULL, 
+                                group.by=NULL, groups = NULL, equal.depth = F, spmr,get.bed = T,
+                              master.dir, run = T, genome, thread.master, thread.sub) {
+  
+  if (is.null(so) || meta.is.ao == T) {
+    df <- ArchR::getCellColData(ao, select = c(meta, group.by)) %>% as.data.frame() %>% 
+      factor2character.fanc() %>% mutate(., cells = rownames(.))
+  } else {
+    df <- so@meta.data[, c(meta, "sample", group.by) %>% unique(), drop = F] %>% factor2character.fanc() 
+    df$cells <- rownames(df) %>% sub("_.*$", "", .)
+    df <- df %>% mutate(cells = paste0(sample, "#", cells))
+  }
+  
+  if (!is.null(subset))
+    df <- df %>% .[.[,meta] %in% subset,]
+  if (meta == "seurat_clusters")
+    df$seurat_clusters <- paste0("cluster_", df$seurat_clusters)
+  if (sort == T) {
+    df <- df[gtools::mixedorder(df[, meta]), ]
+  }
+  
+  cell.list <- df %>% split(., f=factor(.[,meta], levels = unique(.[,meta]))) %>% 
+    lapply(function(x) { 
+      meta.value <- x[, meta][1]
+      
+      if (!is.null(group.by)) {
+        if (!is.null(groups)) {
+          x <- x[x[, group.by] %in% groups,]
+        }
+        cells.by.group <- x %>% split(., f = factor(.[,group.by], levels = unique(sort(.[,group.by])))) %>% 
+          lapply(function(y) {
+            return(y[,"cells"])
+          })
+        
+        names(cells.by.group) <- paste0(meta.value, "_",names(cells.by.group))
+        if (equal.depth == T) {
+          depths <- sapply(cells.by.group, function(x) {
+            d <- getCellColData(ao, select = c("nFrags")) %>% as.data.frame() %>% .[x,"nFrags"] %>% sum()
+            return(d)
+          })
+          depth <- min(depths)
+          names(cells.by.group) <- paste0("depth", depth, "@", names(cells.by.group))
+        }
+      } else {
+        cells.by.group <- list(x[, "cells"])
+        names(cells.by.group) <- meta.value
+      }
+      
+      
+      return(cells.by.group)
+    })
+  cell.list <- Reduce(c, cell.list)
+  
+  if (equal.depth == T) {
+    depth.vec <- names(cell.list) %>% stringr::str_extract(pattern = "depth\\d+@") %>% 
+      stringr::str_extract("\\d+") %>% as.numeric()
+  } else {
+    depth.vec <- NULL
+  }
+  
+  trash <- serial.macs2(obj = ao, cellNames.list = cell.list, genome = genome, n.frag.vec = depth.vec,
                         master.dir = master.dir, root.name = names(cell.list), 
                         get.bed = get.bed, thread.master = thread.master, thread.sub = thread.sub, spmr = spmr, run.macs2 = run)
   
@@ -627,3 +851,30 @@ seurat.sync.archr <- function(so, ao) {
   df.intsct <- df %>% filter(cells %in% ao.cells)
   return(list(so = so[,df.intsct$so.cells], ao = ao[df.intsct$cells,]))
 }
+
+gr.sync <- function(gr1, gr2, minoverlap, out.dir) {
+  o <- findOverlaps(gr1, gr2, minoverlap = minoverlap)
+  stats <- data.frame(total = c(length(gr1), length(gr2)),
+                      hit = c(sum(!duplicated(queryHits(o))), sum(!duplicated(subjectHits(o)))),
+                      dup = c(sum(duplicated(queryHits(o))), sum(duplicated(subjectHits(o)))))
+  rownames(stats) <- c("gr1", "gr2")
+  gr1.filter <- gr1[queryHits(o) %>% unique(),]
+  gr2.filter <- gr2[subjectHits(o) %>% unique(),]
+  gr.merge <- c(gr1.filter, gr2.filter) %>% GenomicRanges::reduce()
+  res.list <- list(gr1.filter = gr1.filter, gr2.filter = gr2.filter,
+                   stats = stats, gr.merge = gr.merge, gr1 = gr1, gr2 = gr2)
+  trash <- mclapply(c("gr1.filter", "gr2.filter", "gr.merge", "gr1", "gr2"), function(x) {
+    gr <- res.list[[x]]
+    utilsFanc::write.zip.fanc(df = gr, out.file = paste0(out.dir, "/",x,".bed"), bed.shift = T)
+    return()
+  }, mc.cores = 10)
+  
+  res.list$gr1 <- NULL
+  res.list$gr2 <- NULL
+  trash <- utilsFanc::write.zip.fanc(df = res.list$stats, 
+                                     out.file = paste0(out.dir, "/stats.tsv"), zip = F,
+                                     row.names = T, col.names = T)
+  return(res.list)
+}
+
+
