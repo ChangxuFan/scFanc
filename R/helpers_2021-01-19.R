@@ -25,21 +25,26 @@ count.by.cluster <- function(so, work.dir=NULL) {
 }
 
 
-get.cell.names.seurat <- function(so, filter.list, style = "Seurat") {
-  meta.df <- so@meta.data %>% scFanc::factor2character.fanc()
-  for (i in 1:length(filter.list)) {
-    meta <- names(filter.list)[i]
-    values <- filter.list[[i]]
-    meta.df <- meta.df %>% .[.[, meta] %in% values,]
-  }
-  if (style == "Seurat") {
-    return(rownames(meta.df))
-  }
-  
-  if (style == "ArchR") {
-    return(paste0(meta.df$sample, "#", sub("_.+$", "", rownames(meta.df))))
-  }
-}
+# get.cell.names.seurat <- function(so, filter.list = NULL, style = "Seurat") {
+#   meta.df <- so@meta.data %>% scFanc::factor2character.fanc()
+#   if (!is.null(filter.list)) {
+#     for (i in 1:length(filter.list)) {
+#       meta <- names(filter.list)[i]
+#       values <- filter.list[[i]]
+#       meta.df <- meta.df %>% .[.[, meta] %in% values,]
+#     }
+#   }
+#   
+#   if (style == "Seurat") {
+#     return(rownames(meta.df))
+#   }
+#   
+#   if (style == "ArchR") {
+#     if (grepl("#", rownames(meta.df)[1]))
+#       return(rownames(meta.df))
+#     return(paste0(meta.df$sample, "#", sub("_.+$", "", rownames(meta.df))))
+#   }
+# }
 
 add.metrics.seurat <- function(so, bc.metrics.file.list, columns.to.add) {
   # bc.metrics.file.list should be a named list like this:

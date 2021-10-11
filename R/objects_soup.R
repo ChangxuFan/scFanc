@@ -1,20 +1,30 @@
-soup.pipe <- function(so, tod, out.Rds = NULL, rho = NULL) {
+soup.pipe <- function(so, tod, soup.range = c(0, 100), out.Rds = NULL, rho = NULL, cluster.ident = "seurat_clusters") {
+  if (length(soup.range) == 1) {
+    soup.range <- c(0, soup.range)
+  }
+  
+  if (length(soup.range) != 2) {
+    stop("fanc error: soup.range mis-specified")
+  }
   if (is.character(so))
     so <- readRDS(so)
+  so@meta.data <- so@meta.data %>% factor2character.fanc()
   if (is.character(tod))
     tod <- readRDS(tod)
   
   toc <- so@assays$RNA@counts
-  sc <- SoupChannel(tod, toc)
-  sc = setClusters(sc, so$seurat_clusters)
+  sc <- SoupChannel(tod, toc, calcSoupProfile = F)
+  sc <- estimateSoup(sc = sc, soupRange = soup.range, keepDroplets = F)
   
+  sc = setClusters(sc, so@meta.data[, cluster.ident])
   sc = setDR(sc, so@reductions$umap@cell.embeddings %>% `colnames<-`(c("RD1", "RD2")))
-  # browser()
+  png(paste0(sub(".[Rr]ds", "", out.Rds), "_estimate.png"))
+  try(sc <- autoEstCont(sc))
+  dev.off()
+  
   if (!is.null(rho)) {
     sc = setContaminationFraction(sc, rho)
-  } else {
-    sc <- autoEstCont(sc)
-  }
+  } 
   sc$soupProfile = sc$soupProfile[rownames(sc$toc),]
   out = adjustCounts(sc, roundToInt = T)
   if (!is.null(out.Rds)) {
@@ -25,7 +35,8 @@ soup.pipe <- function(so, tod, out.Rds = NULL, rho = NULL) {
   
 }
 
-soup.pipe.m <- function(sol, tod.l, names, work.dir, rho = NULL) {
+soup.pipe.m <- function(sol, tod.l, soup.range = c(0, 100),
+                        names, work.dir, rho = NULL, cluster.ident = "seurat_clusters") {
   system(paste0("mkdir -p ", work.dir))
   sol.nosoup <- lapply(seq_along(sol), function(i) {
     so <- sol[[i]]
@@ -38,10 +49,11 @@ soup.pipe.m <- function(sol, tod.l, names, work.dir, rho = NULL) {
     if (i == 2) 
       browser()
     mat <- soup.pipe(so = so, tod = tod, out.Rds = paste0(work.dir, "/",name, "_nosoup_mat.Rds"),
-                     rho = rho)
+                     rho = rho, cluster.ident = cluster.ident, soup.range = soup.range)
     so.nosoup <- CreateSeuratObject(counts = mat, project.name = "nosoup", meta.data = so@meta.data)
     return(so.nosoup)
   })
+  names(sol.nosoup) <- names
   saveRDS(sol.nosoup, paste0(work.dir, "/sol_nosoup.Rds"))
   return(sol.nosoup)
 }
@@ -93,7 +105,8 @@ soup.assess <- function(so, desoup.mat.vec, rho.vec, cluster.ident, clusters = N
 
 
 soup.assess.2 <- function(so, add.soup.mats = T, desoup.mat.vec, rho.vec, # cluster.ident, clusters = NULL,
-                          do.plot = T, markers = NULL, plot.out, save.rds = NULL, threads = 10) {
+                          do.plot = T, markers = NULL, plot.out, save.rds = NULL, threads = 10,
+                          transformation = NULL) {
   if (is.character(so))
     so <- readRDS(so)
   if (is.null(markers))
@@ -104,6 +117,8 @@ soup.assess.2 <- function(so, add.soup.mats = T, desoup.mat.vec, rho.vec, # clus
       desoup.mat <- desoup.mat.vec[i]
       if (is.character(desoup.mat))
         desoup.mat <- readRDS(desoup.mat)
+      if (!is.null(transformation))
+        desoup.mat <- transformation(desoup.mat)
       if (!identical(colnames(so@assays$RNA@counts), colnames(desoup.mat)) ||
           !identical(rownames(so@assays$RNA@counts), rownames(desoup.mat))) {
         stop("the colnames and rownames of desoup.mat must match that of so!")
@@ -126,4 +141,76 @@ soup.assess.2 <- function(so, add.soup.mats = T, desoup.mat.vec, rho.vec, # clus
   if (!is.null(save.rds))
     saveRDS(so, save.rds)
   return(so)
+}
+
+add.desoup.mat <- function(so, desoup.mat.vec, assay.name, save.rds = NULL) {
+  rho.name <- paste0(assay.name, "_rho")
+  if (is.null(names(desoup.mat.vec))) {
+    stop("desoup.mat.vec must be named with sample name")
+  }
+  
+  rho.df <- lapply(desoup.mat.vec, function(x) {
+    df <- data.frame(sample = sub("_nosoup.*$", "", basename(x)),
+                     rho = sub("^.+rho_", "", dirname(x)) %>% as.numeric())
+    return(df)
+  }) %>% Reduce(rbind, .)
+  colnames(rho.df) <- c("sample", rho.name)
+  rownames(rho.df) <- rho.df$sample
+  
+  fake.soi <- utilsFanc::safelapply(names(desoup.mat.vec), function(sample) {
+    mat <- readRDS(desoup.mat.vec[sample])
+    if (!grepl("#", mat@Dimnames[[2]][1]))
+      mat@Dimnames[[2]] <- paste0(sample, "#",  mat@Dimnames[[2]])
+    fake.so <- CreateSeuratObject(counts = mat)
+    return(fake.so)
+  }, threads = length(desoup.mat.vec)) %>% 
+    Reduce(Seurat::merge.Seurat, .)
+  
+  mat <- fake.soi@assays$RNA@counts
+  cells.missing <- colnames(so) %>% .[!. %in% colnames(mat)]
+  if (length(cells.missing) > 0) {
+    stop(paste0(length(cells.missing)," cells in so is not found in desoup.mat.vec\nthe first 5:\n",
+                paste0(cells.missing[1:5], collapse = "\n")))
+  }
+  mat <- mat[, colnames(so)]
+  desoup.assay <- CreateAssayObject(counts = mat)
+  so[[assay.name]] <- desoup.assay
+  so@meta.data[, rho.name] <- rho.df[so$sample, rho.name]
+  so <- NormalizeData(object = so, assay = assay.name)
+  if (!is.null(save.rds)) {
+    system(paste0("mkdir -p ", dirname(save.rds)))
+    saveRDS(so, save.rds)
+  }
+  return(so)
+}
+
+soup.profile.comp <- function(so, tod, soup.range.max.vec, plot.out, threads = NULL) {
+  print("this function is not fully finished. The plotting part was not written. But the summary() should be good enough to show that there is no difference")
+  if (is.null(threads))
+    threads <- length(soup.range.max.vec)
+  if (threads > 12)
+    threads <- 12
+  
+  if (is.character(so)) 
+    so <- readRDS(so)
+  if (is.character(tod))
+    tod <- readRDS(tod)
+  so@meta.data <- so@meta.data %>% factor2character.fanc()
+  toc <- so@assays$RNA@counts
+  sc <- SoupChannel(tod, toc, calcSoupProfile = F)
+  pl <- utilsFanc::safelapply(soup.range.max.vec, function(soup.range.max) {
+    sc <- estimateSoup(sc = sc, soupRange = c(0,soup.range.max), keepDroplets = F)
+    genes <- rownames(tod)
+    tod <- tod[,colSums(tod) < soup.range.max]
+    fanc <- Matrix::t(tod) %>% Matrix.utils::aggregate.Matrix(., groupings = rep("fanc", nrow(.))) %>% 
+      Matrix::t()
+    df <- sc$soupProfile
+    colnames(df) <- c("SoupX_pct", "SoupX_counts")
+    df$fanc_counts <- fanc[rownames(df), 1]
+    summary(df$fanc_counts)
+    summary(df$SoupX_counts)
+    summary(df$fanc_counts-df$SoupX_counts)
+    
+  }, threads = threads)
+  
 }

@@ -1,3 +1,113 @@
+fg.archr <- function(ao, cluster.ident, cluster, group.by, groups = NULL) {
+  # note: cluster, not clusters. only support subsetting by one cluster
+  ao <- ao[getCellColData(ao, cluster.ident, drop = T) == cluster,]
+  cell.list <- get.cell.list(obj = ao, is.ao = T, group.by = group.by, groups = groups, na.rm = T)
+  lapply(names(cell.list), function(group.name) {
+    cells <- cell.list[[group.name]]
+    ao <- ao[ao$cellNames %in% cells]
+
+    t <- getMarkerFeatures(ao, groupBy = "Sample", useGroups = "tumor_rep1", bgdGroups = "ctrl_rep1", 
+                           useMatrix = "PeakMatrix", testMethod = "wilcoxon",
+                           bias = c("TSSEnrichment", "log10(nFrags)"))
+  })
+}
+
+
+bg.gen.2 <- function(mat, fg.vec, n.bg.each, method = "euclidean", scale = "none", no.replace = F,
+                     samples.use = NULL, return.details = F) {
+  # mat has to be named
+  if (!is.matrix(mat))
+    mat <- as.matrix(mat)
+  if (!is.null(samples.use)) {
+    mat <- mat[, samples.use]
+  }
+  dup.fg.vec <- fg.vec %>% .[duplicated(.)]
+  if (length(dup.fg.vec) > 0)
+    stop(paste0("certain fg input are duplicated: \n",
+                paste0(dup.fg.vec[1:5], collapse = "\n")))
+
+  if (no.replace == T) {
+    mat.fg <- mat[rownames(mat) %in% fg.vec, ]
+    mat.bg <- mat[!rownames(mat) %in% fg.vec, ]
+    bg.list <- list()
+    for (fg in fg.vec) {
+      mat.sub <- rbind(mat.fg[fg,], mat.bg %>% .[!rownames(.) %in% unlist(bg.list),])
+      bg <- genefilter::genefinder(X = mat.sub, ilist = 1, numResults = n.bg.each, 
+                                   method = method, scale = "none")
+      bg <- rownames(mat.sub)[bg[[1]]$indices]
+      bg.list <- c(bg.list, list(bg))
+    }
+    bg.vec <- unlist(bg.list)
+    if (any(duplicated(bg.vec))) {
+      stop("any(duplicated(bg.vec))")
+    }
+  } else {
+    fg.id <- sapply(fg.vec, function(x) {
+      id <- which(rownames(mat) == x)
+      if (length(id) != 1)
+        stop(paste0(x, "did not return one unique id"))
+      return(id)
+    })
+    bg.list <- genefilter::genefinder(X = mat, ilist = fg.id, numResults = n.bg.each, 
+                                      method = method, scale = "none")
+    names(bg.list) <- fg.vec
+    
+    if (return.details == T)
+      return(bg.list)
+    bg.id <- lapply(bg.list, function(x) return(x$indices)) %>% Reduce(c, .) %>% 
+      unique()
+    bg.id <- bg.id %>% .[!.%in% fg.id]
+    bg.vec <- rownames(mat)[bg.id]
+  }
+
+  return(bg.vec)
+}
+
+bg.gen.bin <- function(mat, n.bins, samples.use = NULL, return.df = F) {
+  # mat has to be named
+  if (!is.matrix(mat))
+    mat <- as.matrix(mat)
+  if (!is.null(samples.use)) {
+    mat <- mat[, samples.use]
+  }
+  mean.rank <- rowMeans(mat) %>% rank(ties.method = "random")
+  n.per.bin <- ceiling(nrow(mat)/n.bins)
+  split.vec <- ceiling(mean.rank/n.per.bin)
+  bg.list <- rownames(mat) %>% split(f = split.vec)
+  if (return.df == T) {
+    bg.list <- bg.list %>% lapply(function(x) return(utilsFanc::loci.2.df(loci.vec = x)))
+  }
+  return(bg.list)
+}
+
+bg.assess <- function(mat, fg.vec, bg.vec, scatter.xy.df, 
+                      transformation = NULL, plot.out, return.pl = F, ...) {
+  # scatter.xy.df: cols: x, y.
+  df <- mat %>% as.data.frame()
+  df$gene <- rownames(df)
+  rownames(df) <- NULL
+  gene.list <- list(fg = fg.vec, bg = bg.vec)
+  pl <- scatter.xy.df %>% unique() %>% split(., f = 1:nrow(.)) %>% 
+    lapply(function(comp) {
+      # comp: comparison
+      pl <- lapply(names(gene.list), function(type) {
+        genes <- gene.list[[type]]
+        p <- xy.plot(df = df, x = comp$x, y = comp$y, transformation = transformation,
+                     highlight.var = "gene", highlight.values = genes, show.highlight.color.var = F,
+                     plotly.var = "gene", color.density = T, ...) +
+          ggtitle(paste0(comp$y, ":", comp$x, "..", type))
+        return(p)
+      })
+      names(pl) <- names(gene.list)
+      return(pl)
+    }) %>% Reduce(c, .)
+  names(pl) <- paste0(scatter.xy.df$y, "_", scatter.xy.df$x, "_", names(pl))
+  if (return.pl == T)
+    return(pl)
+  trash <- wrap.plots.fanc(plot.list = pl, plot.out = plot.out, n.split = length(gene.list))
+  return()
+}
+
 bg.gen <- function(fg, n.bg, bulkNorm, column, out.root.name=NULL) {
   # out.root.name should contain directory
   
@@ -55,7 +165,7 @@ bg.gen <- function(fg, n.bg, bulkNorm, column, out.root.name=NULL) {
   
   png(filename = paste0(out.root.name, "_distro.png"))
   try(geneplotter::multidensity( list( 
-    all= log2(overallBaseMean[,"bulkNorm_WT"] + 1),
+    all= log2(overallBaseMean[,column] + 1),
     foreground =log2(overallBaseMean[de.genes, column]), 
     background =log2(overallBaseMean[backG, column])), 
     xlab="log2 mean normalized counts", main = "expression distro"))
@@ -143,11 +253,41 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
   return(res)
 }
 
-de.2.rnk <- function(de.grid, comp, pos.filter=NULL, neg.filter=NULL, out.dir, root.name = NULL) {
+de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.topn = NULL, pbl.samples, pbl.clusters = NULL,
+                     comp, pos.filter=NULL, neg.filter=NULL, out.dir, root.name = NULL) {
+  # pbl: pseudobulk list
+  # pbl.samples is really just used to figure out what are the columns corresponding to samples when
+  #taking topn
   system(paste0("mkdir -p ", out.dir))
-  df <- de.grid$grid.sum %>% filter(comp == comp) %>% 
-    mutate(log_p = -log10(p) * (logFC/abs(logFC)) , gene = toupper(gene)) %>% 
-    filter(log_p != 0) %>% select(gene, log_p, master.ident)
+  if (!is.null(de.grid)) {
+    comparison <- comp
+    df <- de.grid$grid.sum %>% filter(comp == comparison) %>% 
+      mutate(log_p = -1 * utilsFanc::log2pm(p, base = 10) * (logFC/abs(logFC)) , gene = toupper(gene)) %>% 
+      filter(log_p != 0) %>% select(gene, log_p, master.ident)
+  } else {
+    if (is.character(pbl))
+      pbl <- readRDS(pbl)
+    pbl <- deseq2.summary(pbl = pbl, padj.cutoff = 0.05, force = T)
+    # only used to remove invalid elements in the list
+    if (!is.null(pbl.clusters)) {
+      pbl <- pbl[names(pbl) %in% pbl.clusters]
+    }
+    df <- lapply(names(pbl), function(name) {
+      s2b <- pbl[[name]]
+      if (!is.null(pbl.topn)) {
+        top.genes <- lapply(pbl.samples, function(sample) {
+          genes <- s2b$res.exp$gene[rank(-1 * s2b$res.exp[, sample], ties.method = "random") <= pbl.topn]
+          return(genes)
+        }) %>% Reduce(union, .)
+        s2b$res.exp <- s2b$res.exp %>% filter(gene %in% top.genes)
+      }
+      df <- s2b$res.exp %>% select(gene, pvalue, log2FoldChange) %>% 
+        mutate(log_p = -log10(pvalue) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
+        filter(log_p != 0) %>% select(gene, log_p, master.ident)
+      return(df)
+    }) %>% Reduce(rbind, .)
+  }
+  
   rnk.list <- df %>% split(f = df$master.ident) %>% 
     lapply(function(x) {
       cluster <- x$master.ident[1]
@@ -356,8 +496,93 @@ gsea.plot.batch <- function(gs.vec.list, so, gpo,
     return()
   })
 }
-t.f.gsea.diag <- function() {
-  print("miao")
-  print("miao")
-  print("mial")
+
+chromVAR.pipe <- function(dev = NULL, ao = NULL, ao.annotation.name, peakmat, cells = NULL, peaks = NULL,
+                          motifs.use = NULL,
+                          compute.dev = T, compute.syn = F, compute.cor = F,
+                          out.dir, root.name = "chromVAR",
+                          do.ridge = T, do.density = T, group.by, groups  = NULL, threads = 1,
+                          motif.base = "homer", bs.genome) {
+  # bs.genome: something like BSgenome.Mmusculus.UCSC.mm10
+  # if dev is specified, this basically becomes a ploting function
+  if (is.null(dev)) {
+    rownames(peakmat) <- rowRanges(peakmat) %>% utilsFanc::gr.get.loci()
+    if (!is.null(peaks)) {
+      peakmat <- peakmat[peaks,]
+    }
+    if (!is.null(cells)) {
+      peakmat <- peakmat[, cells]
+    }
+    
+    peakmat <- addGCBias(object = peakmat, genome = bs.genome)
+    assayNames(peakmat) <- "counts" 
+    if (is.null(ao)) {
+      if (motif.base != "homer") {
+        stop("only homer motif base is developed")
+      }
+      data("homer_pwms")
+      motifs <- homer_pwms
+      obj <- .summarizeChromVARMotifs(motifs)
+      motifs <- obj$motifs
+      motifSummary <- obj$motifSummary
+      motif_ix <- motifmatchr::matchMotifs(motifs, peakmat, 
+                                           genome = bs.genome)
+    } else {
+      motif_ix <- readRDS(getPeakAnnotation(ao, ao.annotation.name)$Matches)
+      assayNames(motif_ix) <- "matches"
+      rownames(motif_ix) <- utilsFanc::gr.get.loci(rowRanges(motif_ix))
+      utilsFanc::check.intersect(x = rownames(peakmat), x.name = "rownames(peakmat)",
+                                 y = rownames(motif_ix), y.name = "rownames(motif_ix")
+      motif_ix <- motif_ix[rownames(motif_ix) %in% rownames(peakmat),]
+    }
+    
+    if (compute.dev == T) {
+      utilsFanc::t.stat("computing deviation")
+      dev <- computeDeviations(object = peakmat, annotations = motif_ix)
+      dir.create(out.dir, showWarnings = F, recursive = T)
+      saveRDS(dev, paste0(out.dir, "/", root.name, "_dev.Rds"))
+    }
+    if (compute.cor == T) {
+      utilsFanc::t.stat("computing correlation")
+      if (!is.null(motifs.use))
+        motif_ix <- motif_ix[, motifs.use]
+      res <- getAnnotationCorrelation(object = peakmat, annotations = motif_ix)
+      dir.create(out.dir, showWarnings = F, recursive = T)
+      saveRDS(res, paste0(out.dir, "/", root.name, "_cor.Rds"))
+    }
+    if (compute.syn == T) {
+      utilsFanc::t.stat("computing synergy")
+      if (!is.null(motifs.use))
+        motif_ix <- motif_ix[, motifs.use]
+      res <- getAnnotationSynergy(object = peakmat, annotations = motif_ix)
+      dir.create(out.dir, showWarnings = F, recursive = T)
+      saveRDS(res, paste0(out.dir, "/", root.name, "_syn.Rds"))
+    }
+    
+  } else {
+    if (is.character(dev))
+      dev <- readRDS(dev)
+  }
+  
+  if (do.ridge == T) {
+    try(chromVAR.ridge(obj = dev, motif.regex = ".+", plot.out = paste0(out.dir, "/", root.name, "_zScore_ridge.png"),
+                   group.by = group.by, groups = groups, threads = threads))
+    
+    
+    try(chromVAR.ridge(obj = dev, motif.regex = ".+", plot.out = paste0(out.dir, "/", root.name, "_raw_ridge.png"),
+                   group.by = group.by, groups = groups, assay = "deviations", threads = threads))
+  }  
+  
+  if (do.density == T) {
+    try(chromVAR.ridge(obj = dev, motif.regex = ".+", plot.out = paste0(out.dir, "/", root.name, "_zScore_density.png"),
+                       group.by = group.by, groups = groups, threads = threads, use.ridge = F))
+    
+    
+    try(chromVAR.ridge(obj = dev, motif.regex = ".+", plot.out = paste0(out.dir, "/", root.name, "_raw_density.png"),
+                       group.by = group.by, groups = groups, assay = "deviations", threads = threads, 
+                       use.ridge = F))
+  }
+  
+  
+  return(dev)
 }

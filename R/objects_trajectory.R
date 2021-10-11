@@ -72,7 +72,7 @@ plot.along.trajec.all <- function(trajec.df, ptimes, y.vars.list, plot.dir, meta
 }
 
 slingshot.archr <- function(ao, cluster.ident, root = NULL, ends=NULL, approx_points,
-                            mat = NULL, embedding, work.dir = NULL, root.name = NULL) {
+                            mat = NULL, embedding, scale.LSI = T, work.dir = NULL, root.name = NULL) {
   if (is.null(mat)) {
     if (embedding == "LSI") {
       mat <- ao@reducedDims$IterativeLSI@listData$matSVD 
@@ -94,7 +94,7 @@ slingshot.archr <- function(ao, cluster.ident, root = NULL, ends=NULL, approx_po
   system(paste0("mkdir -p ", work.dir))
   if (is.null(root.name))
     root.name <- "slingshot"
-  saveRDS(crv, paste0(work.dir, "/", root.name, "_", embedding, "_", approx_points, ".Rds"))
+  saveRDS(crv, paste0(work.dir, "/", root.name, "_", embedding, "_", cluster.ident, "_", approx_points, ".Rds"))
   return(crv)
 }
 

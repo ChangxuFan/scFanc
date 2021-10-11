@@ -166,15 +166,19 @@ get.cell.names.seurat <- function(so, filter.list = NULL, cells = NULL, style = 
   }
   
   if (style == "ArchR") {
-    return(paste0(meta.df$sample, "#", sub("_.+$", "", rownames(meta.df))))
+    if (!grepl("#", rownames(meta.df)[1]))
+      return(paste0(meta.df$sample, "#", sub("_.+$", "", rownames(meta.df))))
+    else
+      return(rownames(meta.df))
   }
 }
 
 add.metrics.seurat <- function(so, bc.metrics.file.list, columns.to.add = NULL) {
   # bc.metrics.file.list should be a named list like this:
   ##
-  meta.df <- so@meta.data %>% factor2character.fanc()
-  meta.df$barcode <- rownames(meta.df) %>% sub("_.+$", "", .)
+  meta.df <- so@meta.data # %>% factor2character.fanc()
+  meta.df$barcode <- rownames(meta.df) %>% sub(".*#", "", .) %>% sub("_.+$", "", .) 
+  
   metrics.df <- meta.df %>% split(., f = factor(.$sample, levels = unique(.$sample)) ) %>% 
     lapply(function(x) {
       sample <- x$sample[1]
@@ -217,13 +221,16 @@ vln.depth <- function(so, bc.metrics.file.list=NULL, plot.dir, metas = c("nCount
   return()
 }
 
-vln.depth.2 <- function(so, ao = NULL, bc.metrics.file.list = NULL, plot.out, cellranger.metas = NULL, ao.embedding = NULL, embedding = "umap",
-                        archr.metas=NULL, metas.plot = NULL,cells = NULL,order,ident = "seurat_clusters",
+vln.depth.2 <- function(so = NULL, ao = NULL, bc.metrics.file.list = NULL, plot.out, cellranger.metas = NULL, ao.embedding = NULL, embedding = "umap",
+                        archr.metas=NULL, metas.plot = NULL,cells = NULL,order,ident = "seurat_clusters", as.factor = T,
                         split.by = "sample", return.so=F, sub.width = NULL, numeric.only = T,
                         sub.height = NULL, n.col = 1, max.quantile = 0.999, violin = F, ...) {
   # task 1: add all metas
+  if (is.null(so)) {
+    so <- fake.so.gen(ao = ao, ao.embedding = "UMAP")
+  }
   if (!is.null(bc.metrics.file.list))
-    so <- add.metrics.seurat(so = so, bc.metrics.file.list = BC.METRICS.FILE.LIST,
+    so <- add.metrics.seurat(so = so, bc.metrics.file.list = bc.metrics.file.list,
                            columns.to.add = cellranger.metas)
   if (!is.null(ao)) {
     so <- seurat.add.archr.meta(so = so, ao = ao,metas = archr.metas)
@@ -246,8 +253,11 @@ vln.depth.2 <- function(so, ao = NULL, bc.metrics.file.list = NULL, plot.out, ce
     
   
   n.splits <- so@meta.data[, split.by] %>% unique() %>% length()
+  if (as.factor == T) {
+    so@meta.data[, ident] <- so@meta.data[, ident] %>% factor(., levels = gtools::mixedsort(unique(.)))
+  }
   
-  trash <- plot.panel.list(panel.list = metas, b2m = F, obj = so, split.by = split.by, assay = "SCT", order = order,
+  trash <- plot.panel.list(panel.list = metas, b2m = F, obj = so, split.by = split.by, assay = "RNA", order = order,
                             return.list = F, cells = cells, n.split = 1, plot.out = plot.out,
                            n.col = n.col, sub.width = sub.width*n.splits, sub.height = sub.height, reduction = embedding,
                            max.quantile = max.quantile, ident = ident, violin = violin ,...)
@@ -380,15 +390,18 @@ a2b.peakwatch.format <- function(df.watch) {
   return(df)
 }
 
-pct.detect <- function(so, cells = NULL, genes = NULL, cluster.ident, clusters) {
+pct.detect <- function(so, cells = NULL, genes = NULL,
+                       assay = "RNA", cluster.ident, clusters) {
   if (is.null(cells)) {
     get.cell.list <- list(clusters)
     names(get.cell.list) <- cluster.ident
     cells <- get.cell.names.seurat(so = so, filter.list = get.cell.list)
   }
-  raw.mat <- so@assays$RNA@counts[, cells]
-  if (!is.null(genes))
-    raw.mat <- raw.mat[genes, ]
+  raw.mat <- so@assays[[assay]]@counts[, cells]
+  if (!is.null(genes)) {
+    raw.mat <- raw.mat[intersect(rownames(raw.mat), genes), ]
+  }
+    
   pct <- (rowSums(raw.mat > 0)/ncol(raw.mat))
   return(pct)
 }
@@ -482,4 +495,384 @@ df.range.filter <- function(in.df, range.list) {
   out.df <- in.df %>% .[.$id %in% ids,] 
   out.df$id <- NULL
   return(out.df)
+}
+
+read.sol <- function(samples, master.dir) {
+  sol <- mclapply(samples, function(sample) {
+    so <- readRDS(paste0(master.dir, "/", sample ,"/soi.Rds"))
+    return(so)
+  }, mc.cores = 6)
+  
+  names(sol) <- samples
+  return(sol)
+}
+
+metrics.distro.simple <- function(sol = NULL, cell.list, bc.metrics.file.vec, out.dir, 
+                                  metrics = c("intergenic_ratio")) {
+  # either sol or cell.list must be specified. they must be named by sample names
+  if (!is.null(sol)) {
+    cell.list <- lapply(sol, function(so) return(colnames(so)))
+    names(cell.list) <- names(sol)
+    rm(sol)
+  }
+  samples <- names(cell.list)
+  if (is.null(samples)) {
+    stop("lists must be named for input")
+  }
+  bc.stat.list <- utilsFanc::safelapply(samples, function(sample) {
+    df <- read.csv(bc.metrics.file.vec[sample]) 
+    if ("intergenic_ratio" %in% metrics) {
+      df <- df %>% mutate(intergenic_ratio = gex_conf_intergenic_reads/gex_mapped_reads)
+    }
+    df <- df [, c(metrics, "is_cell" ,"barcode")]
+    return(df)
+  }, threads = length(samples))
+  names(bc.stat.list) <- samples
+  lapply(metrics, function(metric) {
+    pl <- utilsFanc::safelapply(samples, function(sample) {
+      cell.list.2 <- list()
+      cell.list.2$all <- bc.stat.list[[sample]]$barcode
+      cell.list.2$cell_10x <- bc.stat.list[[sample]] %>% filter(is_cell == 1) %>% pull(barcode)
+      cell.list.2$cell_fanc <- cell.list[[sample]]
+      pl <- lapply(names(cell.list.2), function(type) {
+        p <- ggplot(bc.stat.list[[sample]] %>% filter(barcode %in% cell.list.2[[type]]), aes_string(x = metric)) +
+          geom_density() +
+          ggtitle(type)
+        if (grepl("ratio", metric))
+          p <- p + xlim(c(0,1))
+        return(p)
+      })
+      return(pl)
+    }, threads = length(samples)) %>% Reduce(c, .)
+    wrap.plots.fanc(plot.list = pl, n.col = 3, plot.out = paste0(out.dir, "/", metric, ".png"))
+    return()
+  })
+  return()
+}
+
+mt.interRatio.cor <- function(sol, bc.metrics.file.list, out.file) {
+  pl <- utilsFanc::safelapply(names(sol), function(sample) {
+    so <- sol[[sample]]
+    so <- add.metrics.seurat(so = so, bc.metrics.file.list = bc.metrics.file.list,
+                             columns.to.add = c("gex_conf_intergenic_reads","gex_mapped_reads"))
+    so[["intergenic_ratio"]] <- (so$gex_conf_intergenic_reads/so$gex_mapped_reads) # %>% round(digits = 3)
+    p <- xy.plot(df = so@meta.data, x = "percent.mt", y = "intergenic_ratio", 
+                 x.limit = c(0, 25), y.limit = c(0,1), add.abline = F) + 
+      ggtitle(sample)
+    return(p)
+  }, threads = length(sol))
+  trash <- wrap.plots.fanc(plot.list = pl, plot.out = out.file)
+  return()
+}
+
+int.corr.plot <- function(soi, sol, samples = NULL,  
+                          cluster.ident, clusters = NULL, order = F,
+                          plot.dir, root.name = NULL,
+                          threads = 10) {
+  if (is.character(soi))
+    soi <- readRDS(soi)
+  if (is.character(sol))
+    sol <- readRDS(sol)
+  if (!is.null(samples))
+    names(sol) <- samples
+  
+  if (is.null(names(sol)))
+    stop("samples should be provided or sol should be named")
+  
+  int.cluster.ident <- paste0("int.", cluster.ident)
+  soi[[int.cluster.ident]] <- soi[[cluster.ident]]
+  soi@meta.data <- soi@meta.data %>% factor2character.fanc(re.factor = T)
+  soi$cells <- get.cell.names.seurat(so = soi, style = "ArchR")
+  
+  if (is.null(clusters))
+    clusters <- soi@meta.data[, cluster.ident] %>% unique() %>% gtools::mixedsort()
+  
+  sol <- utilsFanc::safelapply(sol, function(so) {
+    so$cells <- get.cell.names.seurat(so = so, style = "ArchR")
+    df <- soi@meta.data[, c("cells", int.cluster.ident)]
+    so@meta.data <- so@meta.data %>% left_join(df)
+    if (nrow(so@meta.data) != ncol(so)) {
+      stop("nrow(so@meta.data) != ncol(so)")
+    }
+    rownames(so@meta.data) <- colnames(so)
+    for (cluster in clusters) {
+      so[[paste0("IntClus_", cluster)]] <- 0
+      so@meta.data[so@meta.data[, int.cluster.ident] == cluster, paste0("IntClus_", cluster)] <- 1
+    }
+    return(so)
+  }, threads = threads)  
+  
+  for (cluster in clusters) {
+    soi[[paste0("IntClus_", cluster)]] <- 0
+    soi@meta.data[soi@meta.data[, int.cluster.ident] == cluster, paste0("IntClus_", cluster)] <- 1
+  }
+  
+  plot.out <- "int_corr.png"
+  
+  if (!is.null(root.name))
+    plot.out <- paste0(root.name, "..", plot.out)
+  plot.out <- paste0(plot.dir, "/", plot.out)
+  
+  
+  pl <- plot.panel.list.m(panel.list = paste0("IntClus_", clusters), obj = c(list(soi), sol), order = order, 
+                          assay = "RNA", plot.out = plot.out, page.limit = 100, raster = T)
+  
+  # pl <- utilsFanc::safelapply(clusters, function(cluster) {
+  #   # sol <- lapply(sol, function(so) {
+  #   #   so[["hl"]] <- 0
+  #   #   so$hl[so@meta.data[, int.cluster.ident] == cluster] <- 1
+  #   #   return(so)
+  #   # })
+  #   # soi[["hl"]] <- 0
+  #   # soi$hl[soi@meta.data[, int.cluster.ident] == cluster] <- 1
+  #   
+  #   browser()
+  # 
+  #   return(pl)
+  #   
+  # }, threads = threads) %>% Reduce(c, .)
+  # 
+  # 
+  # trash <- wrap.plots.fanc(plot.list = pl, n.col = length(sol) + 1, plot.out = plot.out, page.limit = 100)
+  return()
+}
+
+get.cell.list <- function(obj, is.ao = F, cells.include = NULL,
+                          split.by = NULL, splits = NULL, group.by, groups = NULL,
+                          na.rm = T, return.named.vec = F) {
+  if (is.ao == F) {
+    # obj is so
+    df <- obj@meta.data[, c(split.by, group.by), drop = F] %>% factor2character.fanc()
+    df$cells <- get.cell.names.seurat(so = obj, style = "ArchR")
+  } else {
+    # obj is ao
+    df <- getCellColData(ArchRProj = obj, select = c(split.by, group.by), drop = F) %>% as.data.frame() %>%
+      mutate(., cells = rownames(.))
+  }
+  if (!is.null(cells.include))
+    df <- df %>% filter(cells %in% cells.include)
+  df <- df %>% na.omit()
+  # note this works because df only contains relevant columns (split.by and group.by)
+  if (!is.null(groups)) {
+    df <- df[df[, group.by] %in% groups,]
+  }
+  
+  if (na.rm == T) {
+    df <- df[!is.na(df[, group.by]),]
+  }
+  df$key <- df[, group.by]
+  if (!is.null(split.by)) {
+    df$key <- paste0(df$key, "..", df[, split.by])
+    if (!is.null(splits)) {
+      df <- df[df[, split.by] %in% splits,]
+    }
+  }
+    
+  cell.list <- split(df$cells, f = df$key)
+  if (return.named.vec == T) {
+    res <- list.switch.name(cell.list)
+  } else {
+    res <- cell.list
+  }
+  return(res)
+}
+
+list.switch.name <- function(x) {
+  # x must be a named list of vectors. such as a list of cell names. the list
+  # is named using cluster names.
+  # the goal of the function is to switch cell names and cluster names, generating 
+  # a named vector of clusters, with cell names as element names
+  if (is.null(names(x)))
+    stop("is.null(names(x))")
+  res <- lapply(names(x), function(name) {
+    y <- rep(name, length(x[[name]]))
+    names(y) <- x[[name]]
+    return(y)
+  }) %>% unlist()
+  return(res)
+}
+
+binarize.columns <- function(df, cols, include.items = NULL) {
+  for (col in cols) {
+    items <- df[, col] %>% .[!is.na(.)] %>% unique()
+    df[, col][is.na(df[, col])] <- "NA"
+    if (!is.null(include.items))
+      items <- items %>% .[.%in% include.items]
+    for (i in items) {
+      b.col <- paste0(col, "..", i)
+      df[, b.col] <- 0
+      df[ df[, col] == i, b.col] <- 1
+      
+    }
+    df[,col][df[, col] == "NA"] <- NA
+  }
+  return(df)
+}
+
+select.cells.by.rect <- function(embed.df, rect.df) {
+  # write rect.df just as if you are writing a polygon df.
+  if (nrow(rect.df) != 4) {
+    stop("only selection by rect is allowed")
+  }
+  embed.df <- as.data.frame(embed.df)
+  cells <- embed.df %>% .[.[, 1] > min(rect.df$x) & .[, 1] < max(rect.df$x) &
+                            .[, 2] > min(rect.df$y) & .[, 2] < max(rect.df$y),] %>% 
+    rownames()
+  return(cells)
+}
+
+select.cells.by.polygon <- function(embed.df, x = 1, y = 2, polygon.df) {
+  if (nrow(polygon.df) != 4) {
+    stop("only selection by rect is allowed")
+  }
+  embed.df <- as.data.frame(embed.df)
+  a <- sp::point.in.polygon(point.x = embed.df[, x], point.y = embed.df[, y], 
+                            pol.x = polygon.df$x, pol.y = polygon.df$y)
+  cells <- embed.df[a == 1, ] %>% rownames()
+  return(cells)
+}
+
+
+match.bg.cells.by.umap <- function(obj, embedding = NULL, fg.cells, bg.cells = NULL,
+                                   n.bg.each, method = "euclidean") {
+  if ("Seurat" %in% class(obj)) {
+    if (is.null(embedding))
+      embedding <- "umap"
+    mat <- obj@reductions[[embedding]]@cell.embeddings %>% as.matrix()
+  } else if ("ArchRProject" %in% class(obj)) {
+    if (is.null(embedding))
+      embedding <- "UMAP"
+    mat <- obj@embeddings[[embedding]]$df  %>% as.matrix()
+  } else {
+    mat <- as.matrix(obj)
+  }
+  
+  if (ncol(mat) != 2) {
+    stop("ncol(mat) != 2")
+  }
+
+  colnames(mat) <- paste0("UMAP", 1:2)
+  fg.not.found <- fg.cells %>% .[!. %in% rownames(mat)]
+  if (length(fg.not.found) > 0) {
+    stop(paste0("some fg.not.found \n",
+                paste0(fg.not.found[1:5], collapse = "\n")))
+  }
+  
+  if (!is.null(bg.cells)) {
+    bg.not.found <- bg.cells %>% .[!. %in% rownames(mat)]
+    if (length(bg.not.found) > 0) {
+      stop(paste0("some bg.not.found \n",
+                  paste0(bg.not.found[1:5], collapse = "\n")))
+    }
+    mat <- mat[rownames(mat) %in% c(fg.cells,bg.cells),]
+  }
+  
+  if (length(fg.cells) * n.bg.each > nrow(mat)) {
+    stop("length(fg.cells) * n.bg.each > nrow(mat)")
+  }
+  
+  bg.vec <- bg.gen.2(mat = mat, fg.vec = fg.cells, n.bg.each = n.bg.each, method = method, 
+                     scale = "none", no.replace = T)
+  return(bg.vec)
+}
+
+get.metadata.df <- function(obj) {
+  if ("Seurat" %in% class(obj)) {
+    df <- obj@meta.data
+  } else if ("ArchRProject" %in% class(obj)) {
+    df <- getCellColData(obj, drop = F) %>% as.data.frame()
+  } else {
+    df <- obj
+  }
+  return(df)
+}
+
+scale.row.fanc <- function(mat, force.to.mat = F) {
+  if (force.to.mat == T)
+    mat <- as.matrix(mat)
+  res <- mat %>% t () %>% scale() %>% t() 
+  return(res)
+}
+
+
+select.by.quantile <- function(x, frac.cutoff, na.method = "keep", larger.than = T) {
+  # NA behaviour: keep: NA elements in the input will give NA elements in output.
+  # toT: NA changed to TRUE.
+  # toF: NA changed to FALSE
+  value.cutoff <- quantile(x, frac.cutoff, na.rm = T)
+  res <- x > value.cutoff
+  if (larger.than == F)
+    res <- ! res
+  if (na.method == "toT")
+    res[is.na(res)] <- T
+  if (na.method == "toF")
+    res[is.na(res)] <- F
+  return(res)
+}
+
+normalizePath.partial <- function(path) {
+  # main difference from normalizePath:
+  # it works as long as the directory exists.
+  dir <- dirname(path)
+  file <- basename(path)
+  dir <- normalizePath(dir)
+  return(paste0(dir, "/", file))
+}
+
+marker.overlap <- function(so, x, y, x.name = NULL, y.name = NULL,
+                           cell.list = NULL, group.by, groups = NULL, split.by = NULL, splits = NULL,
+                           assay, slot, exp.threshold = 0,
+                           out.dir, root.name) {
+  if (is.null(x.name))
+    x.name <- paste0(x, collapse = "..")
+  if (is.null(y.name))
+    y.name <- paste0(y, collapse = "..") 
+  # if (is.null(overlap.name))
+  #   overlap.name <- "overlap"
+  
+  if (is.null(cell.list)) {
+    cell.list <- get.cell.list(obj = so, is.ao = F, group.by = group.by, groups = groups,
+                               split.by = split.by, splits = splits)
+  }
+  mat <- GetAssayData(object = so, assay = assay, slot = slot)[c(x, y), unlist(cell.list)]
+  groupings <- c(rep("x", length(x)), rep("y", length(y)))
+  names(groupings) <- c(x, y)
+  
+  df <- lapply(names(cell.list), function(name) {
+    cells <- cell.list[[name]]
+    mat.sub <- mat[, cells]
+    mat.aggr <- aggregate.fanc(mat = mat.sub, margin = 1, groupings = groupings, sort = T)
+    mat.aggr <- mat.aggr > exp.threshold
+    
+    df <- data.frame(cellGroup = name)
+    df[, "total"] <- length(cells)
+    df[, x.name] <- mat.aggr["x",] %>% sum()
+    df[, y.name] <- mat.aggr["y",] %>% sum()
+    df[, "overlap"] <- sum(mat.aggr["x",] & mat.aggr["y",])
+    df[, "frac.in.x"] <- df[, "overlap"]/df[, x.name]
+    df[, "frac.in.y"] <- df[, "overlap"]/df[, y.name]
+    return(df)
+  }) %>% Reduce(rbind, .)
+  
+  system(paste0("mkdir -p ", out.dir))
+  write.table(df, file = paste0(out.dir, "/", root.name, ".tsv"))
+  return(df)
+}
+
+so.label.pos.cells <- function(so, genes, meta.name, pos.name, neg.name = NA,
+                               assay, slot,
+                               threshold = 0) {
+  mat <- GetAssayData(object = so, assay = assay, slot = slot)[genes, , drop = F]
+  mat <- mat > threshold
+  if (nrow(mat) == 1) {
+    b.vec <- mat %>% as.vector()
+  } else {
+    groupings <- rep(meta.name, length(genes))
+    names(groupings) <- genes
+    b.vec <- aggregate.fanc(mat = mat, margin = 1, groupings = groupings)
+  }
+  named.vec <- rep(neg.name, length(b.vec))
+  named.vec[b.vec] <- pos.name
+  so[[meta.name]] <- named.vec
+  return(so)
 }

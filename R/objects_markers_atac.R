@@ -116,8 +116,9 @@ plot.mat.grouping <- function(mat, x.grouping, x.order,
 # }
 
 plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cluster_columns,
-                                     row.dist = "euclidean", row.method = "complete", 
-                                     col.dist = "euclidean", col.method = "complete", plot.out, 
+                                     show_column_names = T, show_row_names = F,
+                                     row.dist = "pearson", row.method = "complete", 
+                                     col.dist = "pearson", col.method = "complete", plot.out, 
                                      width = 700, height = 700) {
   # warning("when using the block annotation of complexheatmap, a k means clustering will first be performed according to the km parameter")
   if (!is.null(k.m)) {
@@ -138,7 +139,7 @@ plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cl
   ha = HeatmapAnnotation(grouping = anno_block(gp = gpar(fill = anno.block)),
                          annotation_name_side = "top", which = "row", annotation_name_rot = 0, show_annotation_name = F)
 
-  hm.params <- list(matrix = mat, show_column_names = T, show_row_names = F,
+  hm.params <- list(matrix = mat, show_column_names = show_column_names, show_row_names = show_row_names,
                     show_row_dend = F, show_column_dend = F, 
                     cluster_rows = cluster_rows, clustering_distance_rows = row.dist, 
                     clustering_method_rows = row.method,
@@ -200,3 +201,5 @@ archr.marker.filter <- function(hm.ns.mat = NULL, mp.mat = NULL, in.markers, siz
     saveRDS(markers.filtered, save.Rds)
   return(markers.filtered)
 }
+
+

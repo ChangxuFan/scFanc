@@ -278,9 +278,87 @@ serial.macs2.2 <- function(obj, cellNames.list, sub.names= NULL,master.dir, root
   
 }
 
+fake.so.gen <- function(ao, ao.embedding, n.gene = 5) {
+  embedding <- ArchR::getEmbedding(ArchRProj = ao, embedding = ao.embedding, returnDF = T)
+  # rownames(embedding) <- sub(".+#", "", rownames(embedding))
+  cells <- rownames(embedding)
   
+  # mat <- diag(length(cells))
+  # rownames(mat) <- paste0("fakeGene-", 1:nrow(mat))
+  # colnames(mat) <- cells
+  
+  n.cells <- length(cells)
+  mat <- matrix(data = sample(c(0,1), x = n.gene * n.cells, replace = T),
+                nrow = n.gene, ncol = n.cells)
+  rownames(mat) <- paste0("fakeGene-", 1:nrow(mat))
+  colnames(mat) <- cells
+  
+  fake.so <- CreateSeuratObject(counts = mat, project = "fake", min.cells = 0, min.features = 0)
 
-seurat.plot.archr <- function(so, ao, ao.embedding, ao.colorBy, ao.name, plot.dir, 
+  if (!identical(colnames(fake.so), cells)) {
+    stop ("!identical(colnames(fake.so), cells)")
+  }
+  fake.so[["umap"]] <- CreateDimReducObject(embeddings = as.matrix(embedding),
+                                              key = paste0(ao.embedding, "_"),
+                                              assay = DefaultAssay(fake.so))
+  fake.so@meta.data <- ArchR::getCellColData(ArchRProj = ao, drop = F) %>% as.data.frame()
+  fake.so$Clusters <- factor(fake.so$Clusters, levels = gtools::mixedsort(unique(fake.so$Clusters)))
+  fake.so[["sample"]] <- fake.so$Sample
+  return(fake.so)
+}  
+
+fake.so.gen.2 <- function(cells = NULL, n.gene = 5, meta.data = NULL) {
+  # note: meta.data must be a seurat object like meta.data, with rownames indicating cell names
+  if (is.null(cells))
+    cells <- rownames(meta.data)
+  n.cells <- length(cells)
+  mat <- matrix(data = sample(c(0,1), x = n.gene * n.cells), nrow = n.gene, ncol = n.cells)
+  rownames(mat) <- paste0("fakeGene-", 1:nrow(mat))
+  colnames(mat) <- cells
+  fake.so <- CreateSeuratObject(counts = mat, project = "fake", min.cells = 0, min.features = 0)
+  if (!is.null(meta.data)) {
+    if (!identical(cells, rownames(meta.data)))
+      stop("!identical(cells, rownames(meta.data))")
+    fake.so@meta.data <- meta.data
+  }
+  
+  return(fake.so)
+  
+}
+
+
+seurat.plot.archr <- function(so, ao, ao.embedding, ao.name, plot.dir, root.name = "ao",
+                              label = T, pt.size = 0.5, 
+                              width = 10, height = 10, ...) {
+  
+  embedding <- ArchR::getEmbedding(ArchRProj = ao, embedding = ao.embedding, returnDF = T)
+  # rownames(embedding) <- sub(".+#", "", rownames(embedding))
+  cells <- rownames(embedding)
+  
+  mat <- diag(length(cells))
+  rownames(mat) <- paste0("fakeGene-", 1:nrow(mat))
+  colnames(mat) <- cells
+  
+  fake.so <- CreateSeuratObject(counts = mat, project = "fake", min.cells = 0, min.features = 0)
+  if (!identical(colnames(fake.so), cells)) {
+    stop ("!identical(colnames(fake.so), cells)")
+  }
+  
+  
+  fake.so[["pseudo"]] <- CreateDimReducObject(embeddings = as.matrix(embedding),
+                                         key = paste0(ao.embedding, "_"),
+                                         assay = DefaultAssay(fake.so))
+  
+  fake.so[[ao.name]] <- ArchR::getCellColData(ArchRProj = ao, select = ao.name, drop = T)
+  
+  dir.create(plot.dir, showWarnings = F,recursive = T)
+  DimPlot(fake.so, reduction = "pseudo",group.by = ao.name, pt.size = pt.size, label = label, label.size = 10, ...) + 
+    ggsave(paste0(plot.dir, "/",root.name,"_", ao.embedding, "_", ao.name, ".png"), 
+           device = "png", width = width, height = height, dpi = 200, units = "in")
+} 
+
+
+seurat.plot.archr.bk <- function(so, ao, ao.embedding, ao.colorBy, ao.name, plot.dir, 
                               width = 10, height = 10, ...) {
   
   embedding <- ArchR::getEmbedding(ArchRProj = ao, embedding = ao.embedding, returnDF = T)
@@ -294,7 +372,7 @@ seurat.plot.archr <- function(so, ao, ao.embedding, ao.colorBy, ao.name, plot.di
   embedding <- embedding[look.up.table$new.name,]
   
   colnames(embedding) <- paste0(ao.embedding, "_", c(1,2))
-
+  
   so@reductions <- lapply(so@reductions, function(x) {
     x@key <- "miao"
     return(x)
@@ -314,16 +392,11 @@ seurat.plot.archr <- function(so, ao, ao.embedding, ao.colorBy, ao.name, plot.di
 } 
 
 
-seurat.plot.archr.2 <- function(so, ao, ao.embedding, ao.plot.list, ao.name, plot.dir, 
-                              width = 10, height = 10, ...) {
-  
- so <- seurat.add.archr.embed(so = so, ao = ao, ao.embedding = ao.embedding)
- 
- 
-} 
-archr.get.peak.mat <- function(ao, mat.name = "PeakMatrix", return.full = F) {
+archr.get.peak.mat <- function(ao, mat.name = "PeakMatrix", mat = NULL, return.full = F) {
   #stop("untested")
-  mat <- ArchR::getMatrixFromProject(ao, useMatrix = mat.name)
+  warning("please don't run these function more than once.")
+  if (is.null(mat))
+    mat <- ArchR::getMatrixFromProject(ao, useMatrix = mat.name)
   # stop("need to add sort2mixedsort")
   
   order <- chr.sort2mixsort(x = rowData(mat)$idx)
@@ -335,9 +408,16 @@ archr.get.peak.mat <- function(ao, mat.name = "PeakMatrix", return.full = F) {
 
 # t <- ArchR::getCellColData(ao.int.prog,drop = F)
 archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, groups = NULL,
+                                 match.bg.df = NULL, match.bg.outdir, bias = c("TSSEnrichment", "log10(nFrags)"), root.name = "match_bg",
+                                 filter.by = NULL, filter.limits, bQuantileFilter = c(F, F), filter.plot.dir = NULL,
                                  melt =T, pseudo.gen = F, seed = NULL, nprep = 2) {
-  df <- ArchR::getCellColData(ao,drop = F, select = c(cluster.ident, group.ident)) %>% 
+  # the format of match.bg.df: fg, bg. If multiple are specified for bg, use "," to separate.
+  # fg can only be one sample. This is determined by ArchR
+  # filter.limits: length of 2. lower and upper bound. bQuantileFilter indicate if they are
+  #quantiles
+  df <- ArchR::getCellColData(ao,drop = F, select = c(cluster.ident, group.ident, filter.by)) %>% 
     as.data.frame() %>%  factor2character.fanc() 
+  df <- df %>% na.omit()
   if (!is.null(clusters))
     df <- df[df[, cluster.ident] %in% clusters,]
   if (!is.null(groups))
@@ -348,9 +428,63 @@ archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, 
       cl <- cl.df[, cluster.ident][1]
       cell.list.cl <- cl.df %>% split(., f = factor(.[,group.ident], levels = gtools::mixedsort(unique(.[,group.ident])))) %>% 
         lapply(function(group.df) {
-          cells <- rownames(group.df)
+          group <- group.df[, group.ident][1]
+          if (!is.null(filter.by)) {
+            if (bQuantileFilter[1] == T) {
+              filter.limits[1] <- quantile(group.df[, filter.by], filter.limits[1])
+            }
+            if (bQuantileFilter[2] == T) {
+              filter.limits[2] <- quantile(group.df[, filter.by], filter.limits[2])
+            }
+            if (!is.null(filter.plot.dir)) {
+              filter.plot <- paste0(filter.plot.dir, "/", filter.by, "..", cl, "..", group, "..", 
+                                    paste0(filter.limits, collapse = "_"), ".png")
+              trash <- rank.plot(df = group.df, vars = filter.by,
+                                 add.h.line = filter.limits)  %>% list() %>% 
+                wrap.plots.fanc(plot.out = filter.plot)
+            }
+            group.df <- group.df %>% .[.[, filter.by] > filter.limits[1] & 
+                                         .[, filter.by] < filter.limits[2], ]
+          }
+          cells <- rownames(group.df)  
           return(cells)
         })
+      # we could just use this cell.list.cl. However, if you want to match bg by archr,
+      #we redefine cell.list.cl. 
+      
+      cl.df <- cl.df[unlist(cell.list.cl),]
+      # just to take advantage of filtering
+      
+      if (!is.null(match.bg.df)) {
+        ao.sub <- ao[ao$cellNames %in% rownames(cl.df),]
+        cell.list.cl <- match.bg.df %>% split(., f= 1:nrow(.)) %>% 
+          lapply(function(comp) {
+            colDat <- getCellColData(ao.sub)
+            fg.groups <- comp$fg
+            bg.groups <- comp$bg %>% strsplit(split = ",") %>% unlist()
+            n.fg <- sum(cl.df[, group.ident] %in% fg.groups)
+            n.bg <- sum(cl.df[, group.ident] %in% bg.groups)
+            if (n.fg > n.bg) {
+              swap <- comp$fg
+              comp$fg <- comp$bg
+              comp$bg <- swap
+              fg.groups <- comp$fg
+              bg.groups <- comp$bg %>% strsplit(split = ",") %>% unlist()
+            }
+            matchObj <- .matchBiasCellGroups(input = colDat, groups = getCellColData(ao.sub, group.ident, drop = T), 
+                                             useGroups = fg.groups, bgdGroups = bg.groups, bias = bias, 
+                                             k = 100, n = 10000, bufferRatio = 0.8, logFile = NULL)
+            res <- list(ao.sub$cellNames[matchObj$matchbgd[[1]]$cells %>% unique()],
+                        ao.sub$cellNames[matchObj$matchbgd[[1]]$bgd %>% unique()])
+            # I have taken the cell list and manually compute nFrags and TSS stats to make sure the 
+            #cell names I get is actually the ones indicated in matchObj
+            dir.create(match.bg.outdir, showWarnings = F, recursive = T)
+            saveRDS(matchObj, paste0(match.bg.outdir, "/", root.name,"_", comp$fg, "..", comp$bg, ".Rds"))
+            names(res) <- c(comp$fg, comp$bg)
+            return(res)
+          }) %>% Reduce(c, .)
+      } 
+    
       # browser()
       if (pseudo.gen == T) {
         cell.list.cl <- lapply(seq_along(cell.list.cl), function(i) {
@@ -572,10 +706,24 @@ per.cluster.macs2.2 <- function(so=NULL, ao, meta, meta.is.ao = F, sort=F, subse
   return(cell.list)
 }
 
-archr.add.seurat <- function(ao, so, meta = "seurat_clusters") {
-  ao <- addCellColData(ArchRProj = ao, data = so@meta.data[, meta] %>% as.character(),
-                       cells = paste0(so$sample, "#", sub("_.+$","",colnames(so))),
+archr.add.seurat <- function(ao, so, meta = "seurat_clusters", as.factor = F) {
+  ao.cells <- getCellNames(ao)
+  so.df <- data.frame(cells = get.cell.names.seurat(so = so, style = "ArchR"),
+                      meta = so@meta.data[, meta] %>% as.character())
+  so.df <- so.df %>% dplyr::filter(cells %in% ao.cells)
+  if (length(ao.cells %>% .[!.%in% so.df$cells]) > 0) {
+    add.df <- data.frame(cells = ao.cells %>% .[!.%in% so.df$cells], 
+                         meta = NA)
+    so.df <- rbind(so.df, add.df)
+  }
+
+  ao <- addCellColData(ArchRProj = ao, data = so.df$meta,
+                       cells = so.df$cells,
                        name = meta, force = T)
+  if (as.factor == T) {
+    ao@cellColData[[meta]] <- factor(ao@cellColData[[meta]],
+                                     levels = gtools::mixedsort(unique(ao@cellColData[[meta]])))
+  }
   return(ao)
 }
 
@@ -645,7 +793,45 @@ so.2.se.archr <- function(so, h5 = H5.VEC, assay, slot ) {
     se <- se[-as.vector(idxDup[idxDup %ni% dupOrder])]
   }
   gc()
-  se
+  se <- se[order(rowRanges(se)),]
+  # this line is important in ensuring that rows won't be permuted when 
+  # geneExpressionMatrix is added to / retrieved from arrow files.
+  # it seems that when things are added to arrow files they are automatically sorted
+  # by ranges. But what lives within the archr object is not automatically sorted
+  # for debug info: RNA_vs_promoter-2021-08-25.R in rep2_3
+  return(se)
+}
+t.f.compare.se <- function(se.a, se.f, a.is.mat = F, f.is.mat = F, 
+                           gene.a = "Hlf", gene.f = "Hlf",
+                       transformation.a = NULL,
+                       cor.method = "spearman",
+                       scatter = F) {
+  if (is.null(rownames(se.a)))
+    rownames(se.a) <- rowData(se.a)$name
+  
+  shared <- intersect(colnames(se.f), colnames(se.a))
+  se.a <- se.a[, shared]
+  se.f <- se.f[, shared]
+  if (a.is.mat == F)
+    a <- assay(se.a)[gene.a,]
+  else
+    a <- se.a[gene.a, ]
+  if (f.is.mat == F)
+    f <- assay(se.f)[gene.f,]
+  else
+    f <- se.f[gene.f, ]
+  
+  if (!is.null(transformation.a)) {
+    a.ori <- a
+    a <- transformation.a(a)
+  }
+    
+  identical(a, f) %>% print()
+  cor(a, f, method = cor.method) %>% print()
+  df <- data.frame(a = a, f = f, a.ori = a.ori)
+  if (scatter == T)
+    xy.plot(df = df, x = "f", y = "a") %>% print()
+  return(df)
 }
 
 
@@ -736,16 +922,16 @@ da.plot.gen <- function(da.list, plot.dir, comp, threads = NULL, ... ) {
   
 }
 
-seurat.add.archr.meta <- function(so, ao, metas = NULL) {
+seurat.add.archr.meta <- function(so, ao, metas = NULL, overwrite = F) {
   so.meta <- so@meta.data
-  so.meta[,"cells"] <- paste0(so.meta$sample, "#", sub("_.+$", "", colnames(so)))
+  so.meta[,"cells"] <- get.cell.names.seurat(so = so, style = "ArchR")
   ao.meta <- getCellColData(ArchRProj = ao) %>% as.data.frame()
-  ao.meta <- ao.meta %>% utilsFanc::change.name.fanc(cols.from = "Sample", cols.to = "sample")
+  ao.meta <- ao.meta # %>% utilsFanc::change.name.fanc(cols.from = "Sample", cols.to = "sample")
   metas.avail <- colnames(ao.meta)
   
   if (is.null(metas)) {
     metas <- metas.avail
-    metas <- metas[!metas %in% c("Sample", "seurat_clusters")]
+    # metas <- metas[!metas %in% c("Sample", "seurat_clusters")]
   }
   if (sum(!metas %in% metas.avail) > 0) {
     not.in <- metas[!metas %in% metas.avail]
@@ -759,6 +945,12 @@ seurat.add.archr.meta <- function(so, ao, metas = NULL) {
   
   ao.meta <- ao.meta[, metas, drop = F]
   ao.meta$cells <- rownames(ao.meta)
+  if (overwrite == T) {
+    so.meta <- so.meta[, c("cells", colnames(so.meta) %>% .[! .%in% colnames(ao.meta)])]
+  } else {
+    ao.meta <- ao.meta[, c("cells", colnames(ao.meta) %>% .[! .%in% colnames(so.meta)])]
+  }
+  
   meta.new <- left_join(so.meta, ao.meta)
   rownames(meta.new) <- rownames(so.meta)
   so@meta.data <- meta.new
@@ -772,8 +964,8 @@ seurat.add.archr.embed <- function(so, ao, ao.embedding, embedding.name = NULL) 
   cells <- rownames(embedding)
   
   look.up.table <- so@meta.data %>% mutate(cell = rownames(so@meta.data)) %>% select(cell, sample) %>% 
-    mutate (cell.ori = sub("_.+$", "", cell)) %>% 
-    mutate(new.name = paste0(sample, "#", cell.ori))
+    # mutate (cell.ori = sub("_.+$", "", cell)) %>% 
+    mutate(new.name = get.cell.names.seurat(so, style = "ArchR"))
   rownames(look.up.table) <- look.up.table$new.name
   embedding <- embedding[look.up.table$new.name,]
   
@@ -846,7 +1038,7 @@ seurat.add.archr.embed <- function(so, ao, ao.embedding, embedding.name = NULL) 
 seurat.sync.archr <- function(so, ao) {
   df <- so@meta.data
   df$so.cells <- rownames(df)
-  df$cells <- paste0(df$sample, "#", sub("_.+$", "", df$so.cells))
+  df$cells <- get.cell.names.seurat(so = so, cells = df$so.cells, style = "ArchR")
   ao.cells <- rownames(ao)
   df.intsct <- df %>% filter(cells %in% ao.cells)
   return(list(so = so[,df.intsct$so.cells], ao = ao[df.intsct$cells,]))
@@ -877,4 +1069,190 @@ gr.sync <- function(gr1, gr2, minoverlap, out.dir) {
   return(res.list)
 }
 
+archr.split.pileup <- function(aoi, split.by, splits = NULL) {
+  if (is.null(splits))
+    splits <- aoi@cellColData[[split.by]] %>% as.character() %>% unique()
+}
 
+
+getGroupBW.fanc <- function (ArchRProj = NULL, cell.list = NULL, groupBy, groups = NULL, split.by, splits = NULL,
+                             normMethod = "ReadsInTSS", out.dir,  
+                             tileSize = 100, maxCells = 1000, ceiling = 4, verbose = TRUE, 
+                             threads = getArchRThreads(), logFile = createLogFile("getGroupBW")) {
+  cellGroups <- cell.list
+  dir.create(out.dir, showWarnings = F, recursive = T)
+  # .validInput(input = ArchRProj, name = "ArchRProj", valid = c("ArchRProj"))
+  # .validInput(input = groupBy, name = "useMatrix", valid = c("character"))
+  # .validInput(input = normMethod, name = "groupBy", valid = c("character"))
+  # .validInput(input = tileSize, name = "divideN", valid = c("integer"))
+  # .validInput(input = maxCells, name = "scaleTo", valid = c("integer", 
+  #                                                           "null"))
+  # .validInput(input = ceiling, name = "ceiling", valid = c("integer", 
+  #                                                          "null"))
+  # .validInput(input = verbose, name = "verbose", valid = c("boolean"))
+  # .validInput(input = threads, name = "threads", valid = c("integer"))
+  # .validInput(input = logFile, name = "logFile", valid = c("character"))
+  tstart <- Sys.time()
+  normMethods <- c("None", "ReadsInTSS", "nCells", "ReadsInPromoter", 
+                   "nFrags")
+  if (tolower(normMethod) %ni% tolower(normMethods)) {
+    stop(paste0("normMethod (", normMethod, ") not in supported normMethods : ", 
+                paste0(normMethods, collapse = ", ")))
+  }
+  # .startLogging(logFile = logFile)
+  # .logThis(normMethod, "normMethod", logFile = logFile)
+  ArrowFiles <- getArrowFiles(ArchRProj)
+  if (tolower(normMethod) %in% tolower(c("ReadsInTSS", "ReadsInPromoter", 
+                                         "nFrags"))) {
+    normBy <- getCellColData(ArchRProj = ArchRProj, select = normMethod)
+  }
+  else {
+    normBy <- NULL
+  }
+  if (is.null(cellGroups)) {
+    cellGroups <- get.cell.list(obj = ArchRProj, is.ao = T, split.by = split.by,
+                                splits = splits, group.by = groupBy, groups = groups)
+    names(cellGroups) <- paste0(names(cellGroups), "..", sapply(cellGroups, length))
+  } 
+  
+  if (!is.null(maxCells)) {
+    gnames <- names(cellGroups)
+    cellGroups <- lapply(seq_along(cellGroups), function(x) {
+      if (length(cellGroups[[x]]) > maxCells) {
+        sample(cellGroups[[x]], maxCells)
+      }
+      else {
+        cellGroups[[x]]
+      }
+    })
+    names(cellGroups) <- gnames
+  }
+  cellsInArrow <- split(rownames(getCellColData(ArchRProj)), 
+                        getCellColData(ArchRProj)$Sample)
+  availableChr <- .availableSeqnames(head(getArrowFiles(ArchRProj)))
+  chromLengths <- getChromLengths(ArchRProj)
+  chromSizes <- getChromSizes(ArchRProj)
+  tiles <- unlist(slidingWindows(chromSizes, width = tileSize, 
+                                 step = tileSize))
+  if (threads > 1) {
+    h5disableFileLocking()
+  }
+  covFiles <- c()
+  for (i in seq_along(cellGroups)) {
+    # browser()
+    o <- .createGroupBW(i = i, cellGroups = cellGroups, 
+                        ArrowFiles = getArrowFiles(ArchRProj), cellsInArrow = cellsInArrow, 
+                        availableChr = availableChr, chromLengths = chromLengths, 
+                        normMethod = normMethod, normBy = normBy, ceiling = ceiling, 
+                        tiles = tiles, tileSize = tileSize, bwDir = out.dir, 
+                        threads = threads, verbose = verbose, tstart = tstart)
+    covFiles <- c(covFiles, o)
+  }
+  if (threads > 1) {
+    h5enableFileLocking()
+  } 
+  
+  return()
+}
+
+
+archr.diffbind.gen <- function(ao = NULL, cluster.ident, clusters, 
+                               group.ident, groups, 
+                               macs2.dir, file.out, 
+                               threads.clusters = 1, threads.groups = 4, threads.bam.sort = 1,
+                               genome, force.bam.gen = F, 
+                               bedToBam = "/bar/cfan/anaconda2/envs/jupyter/bin/bedToBam", 
+                               samtools = "/bar/cfan/anaconda2/envs/jupyter/bin/samtools") {
+  # groups: basically samples. the information of replicates are parsed from the sample names
+  if (!is.null(ao))
+    stop("this part of the function has not been developed")
+  sample.sheet <- utilsFanc::safelapply(clusters, function(cluster) {
+    utilsFanc::safelapply(groups, function(group) {
+      dir.name <- paste0(macs2.dir, "/", cluster, "_", group, "_*") %>% Sys.glob()
+      root.name <- basename(dir.name)
+      factor <- sub("_rep.+", "", group)
+      if (length(dir.name) != 1)
+        stop("length(dir.name) != 1")
+      rep <- stringr::str_extract(group, "rep\\d+") %>% sub("rep", "", .) %>% as.numeric()
+      peak.file <- paste0(dir.name, "/", root.name, "_peaks.narrowPeak")
+      if (!file.exists(peak.file))
+        stop(paste0(peak.file, " doesn't exist"))
+      bam.file <- paste0(dir.name, "/", root.name, ".bam")
+      if (!file.exists(bam.file) || force.bam.gen == T) {
+        bed.file <- paste0(dir.name, "/", root.name, ".bed")
+        cmd <- paste0(bedToBam, " -i ", bed.file, " -g ", "~/genomes/", genome, "/", genome, ".chrom.sizes",
+                      " -mapq 42 | ", samtools, " sort - -m 4G -o ",
+                      bam.file, " -@ ", threads.bam.sort)
+        print(cmd); system(cmd)
+        
+        cmd <- paste0(samtools, " index ",bam.file )
+        print(cmd); system(cmd)
+        
+        if (!file.exists(bam.file))
+          stop(paste0(bam.file, " was not successfully created"))
+      }
+      bam.index <- paste0(bam.file, ".bai")
+      if (!file.exists(bam.index)) {
+        cmd <- paste0(samtools, " index ", bam.file)
+        print(cmd); system(cmd)
+      } 
+      
+      df <- data.frame(SampleID = group, Factor = factor, Replicate = rep, bamReads = bam.file,
+                       Peaks = peak.file, PeakCaller = "narrow")
+      return(df)
+    }, threads = threads.groups) %>% Reduce(rbind, .) %>% return()
+  }, threads = threads.clusters) %>% Reduce(rbind, .)
+  
+  dir.create(dirname(file.out), showWarnings = F, recursive = T)
+  write.table(sample.sheet, file.out, quote = F, sep = "\t", row.names = F, col.names = T)
+  return(sample.sheet)
+}
+
+archr.enrich.2.df <- function(archr.se, assays = NULL) {
+  if (is.null(assays)) {
+    assays <- names(assays(archr.se))
+  }
+  assays <- assays %>% .[.%in%names(assays(archr.se))]
+  df <- lapply(assays, function(assay) {
+    return(assays(archr.se)[[assay]][ ,1])
+  }) %>% `names<-` (assays) %>% as.data.frame()
+  # browser()
+  # df <- utilsFanc::add.column.fanc(df1 = df, df2 = data.frame(feature = rownames(archr.se)),
+  #                                  pos = 1)
+  return(df)
+}
+
+save.archr.fanc <- function(ao, new.work.dir, copy.arrow = T, pseudo.copy = F, over.write = F) {
+  new.work.dir <- normalizePath(new.work.dir, mustWork = F)
+  if (dir.exists(new.work.dir) && over.write == F)
+    stop(paste0(new.work.dir, " already exists"))
+  dir.create(new.work.dir, showWarnings = F, recursive = T)
+  ao@projectMetadata$outputDirectory <- new.work.dir
+  samples <- ao$Sample %>% unique()
+  ao@sampleColData <- ao@sampleColData[rownames(ao@sampleColData) %in% samples,, drop = F]
+  if (copy.arrow == T) {
+    new.arrow.dir <- paste0(new.work.dir, "/ArrowFiles")
+    dir.create(new.arrow.dir)
+    old.arrow <- ao@sampleColData$ArrowFiles
+    new.arrow <- paste0(new.arrow.dir, "/", basename(old.arrow))
+    if (pseudo.copy == F) {
+      utilsFanc::safelapply(1:length(old.arrow), function(i) {
+        system(paste0("rsync --partial ", old.arrow, " ", new.arrow))
+        return()
+      }, threads = length(old.arrow))
+    }
+    ao@sampleColData$ArrowFiles <- new.arrow
+  }
+  saveRDS(ao, paste0(new.work.dir, "/ao.Rds"))
+  return(ao)
+}
+
+get.named.coldata <- function(ao, col, na.rm = F) {
+  if (length(col) != 1)
+    stop("length(col) != 1")
+  res <- getCellColData(ArchRProj = ao, select = col, drop = T)
+  names(res) <- ao$cellNames
+  if (na.rm == T)
+    res <- res %>% .[!is.na(.)]
+  return(res)
+}

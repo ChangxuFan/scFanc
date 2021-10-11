@@ -187,3 +187,22 @@ marker.2.gmt <- function(marker.list, lin.marker.o=NULL, out.gmt, gmt.name) {
   names(out.gmt) <- gmt.name
   return(out.gmt)
 }
+
+lin.marker.gen.ez <- function(so, idents.list, group.by, assay, ident, subset.ident = NULL,
+                              p.adj.cutoff, logfc.cutoff, ...) {
+  # example of idents.list: list(granu = list(ident.1 = "0", ident.2 = "15"))
+  DefaultAssay(so) <- assay
+  Idents(so) <- ident
+  markers.list <- lapply(idents.list, function(x) {
+    m <- FindMarkers(so, ident.1 = x$ident.1, ident.2 = x$ident.2,
+                     group.by = group.by,
+                     subset.ident = subset.ident, ...)
+    m <- utilsFanc::add.column.fanc(df1 = m, df2 = data.frame(gene = rownames(m)), pos = 1)
+    m <- m %>% filter(p_val_adj < p.adj.cutoff, abs(avg_logFC) > logfc.cutoff)
+    res <- list()
+    res$up <- m %>% filter(avg_logFC > 0)
+    res$down <- m %>% filter(avg_logFC < 0)
+    return(res)
+  })
+  return(markers.list)
+}

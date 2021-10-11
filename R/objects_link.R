@@ -208,7 +208,9 @@ bedpe.2.dorc.m <- function(bedpe.vec, sample.names=NULL, pos.only,
 }
 
 tss.gex.gen <- function(s2b.list, tss.df = TSS.CELLRANGER.RDS, samples, master.dir, 
+                        group.id = sample(1:100, 1),
                         thread = 6, zip.only = F) {
+  stop("deprecated: this function does not perform normalization!!")
   if (is.character(s2b.list))
     s2b.list <- readRDS(s2b.list)
   if (is.character(tss.df))
@@ -235,10 +237,47 @@ tss.gex.gen <- function(s2b.list, tss.df = TSS.CELLRANGER.RDS, samples, master.d
     }, mc.cleanup = T, mc.cores = thread)    
   }
   cmd <- paste0("/bar/cfan/R_for_bash/json_dir2.R -d", master.dir, " -f ", "\"bdg.gz$\"")
+  if (!is.null(group.id)) {
+    cmd <- paste0( cmd, " --group ", group.id)
+  }
   print(cmd); system(cmd)
   return(utilsFanc::bash2ftp(paste0(master.dir, "/files.json")))
 
 }
+
+tss.gex.gen.2 <- function(so, assay, slot,
+                          tss.df = TSS.CELLRANGER.RDS,
+                          group.ident = "sample", groups = NULL, 
+                          cluster.ident, clusters = NULL,
+                          master.dir, 
+                          group.id = sample(1:100, 1),
+                          thread = 6) {
+  if (is.character(tss.df))
+    tss.df <- readRDS(tss.df)
+  groupings <- get.cell.list(obj = so, is.ao = F, split.by = cluster.ident, splits = clusters,
+                group.by = group.ident, groups = groups, na.rm = T, return.named.vec = T)
+  mat <- Seurat::GetAssayData(object = so, slot = slot, assay = assay)
+  
+  mat.aggr <- aggregate.fanc(mat = mat, margin = 2, groupings = groupings, 
+                             na.rm = T, take.mean = T, sort = T)
+  
+  trash <- mclapply(1:ncol(mat.aggr), function(i) {
+    group.name <- colnames(mat.aggr)[i]
+    gex.df <- data.frame(GEX = mat.aggr[, i],
+                         gene = rownames(mat.aggr), row.names = NULL)
+    bdg <- left_join(tss.df, gex.df) %>% select("chr", "start", "end", "GEX", "gene")
+    bdg.file <- paste0(master.dir, "/", group.name, ".bdg")
+    utilsFanc::write.zip.fanc(df = bdg, out.file = bdg.file, bed.shift = F)
+    return()
+  }, mc.cleanup = T, mc.cores = thread)
+  cmd <- paste0("/bar/cfan/R_for_bash/json_dir2.R -d", master.dir, " -f ", "\"bdg.gz$\"")
+  if (!is.null(group.id)) {
+    cmd <- paste0( cmd, " --group ", group.id)
+  }
+  print(cmd); system(cmd)
+  return(utilsFanc::bash2ftp(paste0(master.dir, "/files.json")))
+}
+
 
 da.diag.link <- function(da.gr.list, cmp, de.grid.sum, dorc, cluster.ident, clusters = NULL,
                          plot.out=NULL, threads = 6, de.p.filter=1, de.p.adj.filter,
@@ -445,4 +484,198 @@ joined.peakwatch <- function(a2b.list, s2b.list, dorc, grid.sum,comp, bedpe.vec=
     })
   }
   return(a2b.list)
+}
+
+archr.link.2.browser <- function(ao, link.o = NULL, cor.cutoff, out.dir, root.name) {
+  if (missing(cor.cutoff))
+    stop("cor.cutoff is actually enforced even you give link.o. It's used to write file names")
+  if (is.null(link.o))
+    link.o <- getPeak2GeneLinks(ao, returnLoops = F, resolution = 1,
+                                corCutOff = cor.cutoff)
+  gr.p <- metadata(link.o)$peakSet[link.o$idxATAC]
+  gr.g <- metadata(link.o)$geneSet[link.o$idxRNA]
+  gr.g <- resize(gr.g, width = 1, fix = "start")
+  g.int <- GenomicInteractions(gr.p, gr.g)
+  mcols(g.int) <- cbind(mcols(g.int), link.o)
+  
+  out.file <- paste0(out.dir, "/", root.name, "_cor_", cor.cutoff, ".bed")
+  out.lr <- paste0(out.dir, "/", root.name, "_cor_", cor.cutoff, ".lr")
+  
+  if (!is.null(out.file)) {
+    df <- g.int %>% `names<-`(NULL) %>% as.data.frame() %>% 
+      mutate(start1 = start1-1, start2 = start2 - 1)
+    dir.create(dirname(out.file), showWarnings = F, recursive = F)
+    write.table(df, out.file, sep = "\t", quote = F, row.names = F, col.names = T)
+    write.table(df[sample(1:nrow(df), 100, replace = F),], 
+                out.file %>% utilsFanc::insert.name.before.ext("peakwatch"), 
+                sep = "\t", quote = F, row.names = F, col.names = T)
+  }
+  if (!is.null(out.lr)) {
+    utilsFanc::gint.2.lr(g.int, value.col = "Correlation", out.file = out.lr)
+  }
+    # utilsFanc::gint.2.lr(g.int, value.col = "FDR", out.file = out.lr,
+    #           value.transformation = function(x) return(-1 * log10(x + min(x[x>0]))))
+  return(g.int)
+}
+
+gint.peakwatch <- function(gint, out.file = NULL) {
+  
+}
+
+
+archr.Grange.2.browser <- function(gr, out.file = NULL, value.col = "value", 
+                                   ext.up = 250, ext.down = 250) {
+  df <- lapply(1:2, function(i) {
+    if (i == 2) {
+      anchor.1 = end(gr)
+      anchor.2 = start(gr)
+    } else {
+      anchor.1 = start(gr)
+      anchor.2 = end(gr)
+    }
+      
+    df <- data.frame(
+      chr = seqnames(gr),
+      start = anchor.1 - ext.up,
+      end = anchor.1 + ext.up,
+      forth = paste0(seqnames(gr), ":", anchor.2-ext.up, "-", anchor.2 + ext.up,
+                     ",", mcols(gr)[, value.col] %>% format(digits = 3))
+    )
+    return(df)
+  }) %>% Reduce(rbind, .) %>% arrange(chr, start)
+  if (is.null(out.file)) {
+    return(df)
+  }
+  trash <- utilsFanc::write.zip.fanc(df = df, out.file = out.file, bed.shift = F)
+  return()
+}
+
+
+link.along.trajec <- function(peakmat.se, peakmat.assay.name = "PeakMatrix", peaks = NULL, 
+                              gexmat.se, genes = NULL, gexmat.assay.name = "counts", 
+                              sling.o, lineage, sling.weight.cutoff = 0,
+                              max.dist = 250000, bin.size = 100, cor.method = "spearman",
+                              single.bp.tss = T,
+                              threads = 1, work.dir, root.name) {
+  dir.create(work.dir, showWarnings = F, recursive = T)
+  if (length(grep("SummarizedExperiment", class(peakmat.se))) < 1) {
+    stop("peakmat.se must be (Ranged)SummarizedExperiment")
+  }
+  if (!is.null(peaks)) {
+    peakmat.se <- peakmat.se[rownames(peakmat.se) %in% peaks,]
+  }
+  if (length(grep("SummarizedExperiment", class(gexmat.se))) < 1) {
+    stop("gexmat.se must be (Ranged)SummarizedExperiment. use so.2.se.archr()")
+  }
+  if (!is.null(genes)) {
+    gexmat.se <- gexmat.se[rownames(gexmat.se) %in% genes, ]
+  }
+  
+  if (length(lineage) != 1) {
+    stop("length(lineage) != 1")
+  }
+  # if (!is.null(cells.use)) {
+  #   peakmat.se <- peakmat.se %>% .[,colnames(.) %in% cells.use]
+  #   gexmat.se <- gexmat.se %>% .[,colnames(.) %in% cells.use]
+  # }
+  # 
+  if (is.character(sling.o))
+    sling.o <- readRDS(sling.o)
+
+  pt <- slingshot::slingPseudotime(sling.o)[, lineage]
+  pt <- pt %>% .[!is.na(.)]
+  
+  if (sling.weight.cutoff > 0) {
+    stop("untested")
+    weights <- slingshot::slingCurveWeights(sling.o)[, lineage]
+    cells.pass.weights <- weights %>% .[. > sling.weight.cutoff] %>% names()
+    pt <- pt[names(pt) %in% cells.pass.weights]
+  }
+  
+  pt <- sort(pt)
+  groupings <- ((1:length(pt))/bin.size) %>% ceiling()
+  names(groupings) <- names(pt)
+  utilsFanc::check.intersect(x = names(groupings), x.name = "cells from sling.o",
+                             y = colnames(gexmat.se), y.names = "gexmat.se")
+  utilsFanc::check.intersect(x = names(groupings), x.name = "cells from sling.o",
+                             y = colnames(peakmat.se), y.names = "peakmat.se")
+  
+  gexmat.se <- aggregate.fanc(mat = gexmat.se, margin = 2, 
+                              se.assay.name = gexmat.assay.name, 
+                              groupings = groupings, na.rm = T, 
+                              take.mean = T, sort = T, binarize = F)
+  o <- DataFrame(
+    findOverlaps(
+      .suppressAll(resize(gexmat.se, 2 * max.dist + 1, "center")), 
+      resize(rowRanges(peakmat.se), 1, "center"), 
+      ignore.strand = TRUE
+    )
+  ) # literally taken from ArchR code (addPeak2GeneLinks)
+  
+  peakmat.se <- peakmat.se[o[, 2],]
+  peakmat.se <- aggregate.fanc(mat = peakmat.se, margin = 2, 
+                              se.assay.name = peakmat.assay.name, 
+                              groupings = groupings, na.rm = T, 
+                              take.mean = T, sort = T, binarize = F)
+  # since we changed peakmat.se, we need to "re-find" the interactions:
+  o <- DataFrame(
+    findOverlaps(
+      .suppressAll(resize(gexmat.se, 2 * max.dist + 1, "center")), 
+      resize(rowRanges(peakmat.se), 1, "center"), 
+      ignore.strand = TRUE
+    )
+  ) # literally taken from ArchR code (addPeak2GeneLinks)
+  
+  gr.gex <- rowRanges(gexmat.se)[o[, 1],]
+  mcols(gr.gex) <- DataFrame(gene = names(gr.gex))
+  if (single.bp.tss == T) {
+    gr.gex <- resize(gr.gex, width = 1, fix = "start")
+  }
+  gr.peak <- rowRanges(peakmat.se)[o[, 2],]
+  
+  gint <- GenomicInteractions(gr.peak, gr.gex)
+  
+  # calculate correlation:
+  corr <- utilsFanc::safelapply(1:nrow(o), function(i) {
+    res <- cor(assays())
+  }, threads = threads)
+}
+
+
+addSlingShotTrajectories.fanc <- function(ArchRProj, curve.object, weight.cutoff,
+                                          lineage.names, name = "ss", force = F) {
+  pt <- slingPseudotime(curve.object)
+  pt <- pt[, lineage.names, drop = F]
+  weights <- slingCurveWeights(curve.object)
+  for (curve in colnames(pt)) {
+    pt.sub <- pt[, curve] # should be a named vector
+    pt.sub <- pt.sub[names(weights[, curve] %>% .[.>weight.cutoff])]
+    ptn <- 100 * ArchR::.getQuantiles(pt.sub)
+    col.name <- paste0(name, ".", curve)
+    
+    ArchRProj <- addCellColData(ArchRProj = ArchRProj, data = as.vector(ptn),
+                                name = col.name, cells = names(ptn), 
+                                force = force)
+  }
+  ArchRProj
+}
+
+archr.link.assess <- function(ao, out.dir, root.name, cor.cutoff ) {
+  p2g <- getPeak2GeneLinks(ao, corCutOff = cor.cutoff)
+  p2g$Peak2GeneLinks$width <- width(p2g$Peak2GeneLinks)
+  n.links <- p2g$Peak2GeneLinks %>% length()
+  pl <- lapply(c("width", "value", "FDR"), function(x) {
+    p <- rank.plot(df = p2g$Peak2GeneLinks, vars = x) +
+      ggtitle(x)
+    return(p)
+  })
+  names(pl) <- c("width", "value", "FDR")
+  # pl$value.fdr <- xy.plot(df = p2g$Peak2GeneLinks, x = "value", y = "FDR", add.abline = F, color.density = F,
+  #                         transformation.y = function(x) return(-1 * log10(x + min(x[x>0])))) 
+  pl$width.value <- xy.plot(df = p2g$Peak2GeneLinks, x = "width", y = "value", 
+                            add.abline = F, color.density = T) +
+    ggtitle(paste0("n.links: ", n.links))
+  
+  trash <- wrap.plots.fanc(plot.list = pl, plot.out = paste0(out.dir, "/", root.name, "_assess_cor_", cor.cutoff, ".png"))
+  return()
 }

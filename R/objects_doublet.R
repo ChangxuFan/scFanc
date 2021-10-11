@@ -146,8 +146,14 @@ seurat.doublet.removal <- function(so, ao=NULL, Rds=NULL, score, frac) {
     # l <- seurat.sync.archr(so = so, ao =ao)
     # so <- l$so
     # ao <- l$ao
-    stat <- getCellColData(ao)[, score]
-    names(stat) <- rownames(ao)
+    if (!is.null(ao)) {
+      stat <- getCellColData(ao)[, score]
+      names(stat) <- rownames(ao)
+    } else {
+      stat <- so@meta.data[, score]
+      names(stat) <- get.cell.names.seurat(so = so, style = "ArchR")
+    }
+    
   }
   cells.avail <- get.cell.names.seurat(so = so, style = "ArchR")
   stat <- stat[cells.avail]
