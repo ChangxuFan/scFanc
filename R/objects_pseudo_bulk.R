@@ -34,6 +34,26 @@ so.2.bulk <- function(so, root.name = NULL, assay, slot, cells=NULL, genes = NUL
     meta.df$miao <- "wang"
   }
   
+  if (length(group.by) > 1) {
+    meta.df$mult <- Reduce(function(x,y) paste(x, y, sep = ".."),
+                           meta.df[, group.by] %>% as.list())
+    if (!is.null(groups)) {
+      if (!is.list(groups) || length(groups) != length(group.by)) {
+        stop("when length(group.by) > 1 and !is.null(groups), groups must be a list, each element corresponding to group.by")
+      }
+      groups <- lapply(seq_along(groups), function(i) {
+        x <- groups[[i]]
+        if (is.null(x)) {
+          x <- meta.df[, group.by[i]] %>% unique() %>% .[!is.na(.)]
+        }
+        return(x)
+      })
+      groups <- Reduce(function(x, y) outer(x, y, FUN = function(x, y) paste(x,y, sep = "..")),
+                       groups) %>% as.character()
+    }
+    group.by <- "mult"
+  }
+  
   meta.df <- meta.df %>% utilsFanc::change.name.fanc(cols.from = group.by, cols.to = "tgroup")
   if (is.null(coldata.columns)) {
     meta.df[, group.by] <- meta.df$tgroup
@@ -245,8 +265,15 @@ ao.2.bulk <- function(ao=NULL, root.name, cell.list = NULL, gr = NULL, gr.sample
       coldata.df <- data.frame(sample = sub("..prep.*$", "", gr.sample.cols))
       rownames(coldata.df) <- gr.sample.cols
     } else {
-      coldata.df <- getCellColData(ao, select = c(group.ident, coldata.columns), drop = F) %>% 
-        as.data.frame() %>% unique() %>% `rownames<-`(., .[, group.ident])
+      coldata.df <- getCellColData(ao, select = unique(c(group.ident, coldata.columns)), drop = F) %>% 
+        as.data.frame() %>% na.omit() %>% unique()
+      if (length(group.ident) > 1) {
+        rownames(coldata.df) <- Reduce(function(x,y) paste(x, y, sep = ".."),
+                                       coldata.df[, group.ident] %>% as.list())
+      } else {
+        rownames(coldata.df) <- coldata.df[, group.ident] 
+      }
+      
     }
   } 
 
@@ -345,7 +372,6 @@ t.f.a2b.da <- function(a2b.list, use.peakwatch=F, p.adj.cutoff, p.cutoff,
       p <- xy.plot(df = a2b$bulkNorm, x = paste0("bulkNorm_", sample.x), y = paste0("bulkNorm_", sample.y), 
                    highlight.var = "gene", highlight.values = hl) +
         ggtitle(paste0(name, ", ",stratify))
-      # browser()
       return(p)
     })
     return(p.list)
@@ -360,15 +386,19 @@ t.f.a2b.da <- function(a2b.list, use.peakwatch=F, p.adj.cutoff, p.cutoff,
   return()
 }
 
-ao.2.bulk.list <- function(ao, peakmat, pseudo, sample.order = NULL, cell.prep.dir,
-                           filter.nz = F, filter.size = NULL, sequential.filter,
+ao.2.bulk.list <- function(ao, peakmat, pseudo, cell.prep.dir, sample.order = NULL,
+                           filter.nz = F, filter.size = NULL, filter.samples = NULL,
+                           filter.fun = "max", sequential.filter,
+                           independentFiltering = T,
+                           quantile.norm = F, 
+                           deseq2.norm.method = "ratio", deseq2.locfunc = NULL,
                            coldata.columns = NULL, coldata.df = NULL,
                            pca.ntop = 10000, pca.groupings = NULL,
                            cluster.ident, clusters = NULL, group.ident, groups = NULL, 
                            match.bg.df = NULL, 
                            filter.by = NULL, filter.limits, bQuantileFilter = c(F, F), 
                            design.formula, contrast,
-                           do.plot = T, 
+                           do.plot = F, 
                            work.dir,threads = 6, plot.dir = NULL,
                            single.sample = F) {
   if (is.null(plot.dir))
@@ -377,6 +407,12 @@ ao.2.bulk.list <- function(ao, peakmat, pseudo, sample.order = NULL, cell.prep.d
   
   if (is.null(pca.groupings))
     pca.groupings <- coldata.columns
+  
+  if (is.null(cluster.ident)) {
+    cluster.ident <- "pd_cluster"
+    ao <- addCellColData(ArchRProj = ao, data = rep("0", length(ao$cellNames)),
+                         cells = ao$cellNames, name = cluster.ident, force = T)
+  }
   
   if (is.null(clusters)) {
     clusters <- getCellColData(ao, select = cluster.ident)[, cluster.ident] %>% unique() %>% 
@@ -390,8 +426,11 @@ ao.2.bulk.list <- function(ao, peakmat, pseudo, sample.order = NULL, cell.prep.d
                      match.bg.df = match.bg.df,
                      filter.by = filter.by, filter.limits = filter.limits,
                      bQuantileFilter = bQuantileFilter, cell.prep.dir = cell.prep.dir)
-    a2b <- s2b.deseq(s2b.obj = a2b, 
-                     filter.nz = filter.nz, filter.size = filter.size, sequential.filter = sequential.filter,
+    a2b <- s2b.deseq(s2b.obj = a2b, quantile.norm = quantile.norm,
+                     norm.method = deseq2.norm.method, locfunc = deseq2.locfunc,
+                     filter.nz = filter.nz, filter.size = filter.size, filter.samples = filter.samples,
+                     filter.fun = filter.fun, sequential.filter = sequential.filter,
+                     independentFiltering = independentFiltering,
                      pca.ntop = pca.ntop, pca.groupings = pca.groupings,
                      design = design.formula, contrast = contrast,
                      sample.order = sample.order, try.hm = do.plot,
@@ -406,16 +445,48 @@ ao.2.bulk.list <- function(ao, peakmat, pseudo, sample.order = NULL, cell.prep.d
     a2b.list <- a2bl.add.shrinkage(a2bl = a2b.list, contrast = contrast, sample.order = sample.order, 
                                    threads = threads)
   })
-  # browser()
   names(a2b.list) <- paste0(cluster.ident, "_",clusters)
   saveRDS(a2b.list, paste0(work.dir, "/ao.bulk.list.Rds"))
   return(a2b.list)
 }
   
-  
-s2b.deseq <- function(s2b.obj, 
+ao.2.bulk.soupmode <- function(ao, peakmat, ref.da, cluster.ident,
+                               quantile.norm = F, contrast,
+                               threads = 1,
+                               work.dir) {
+  if (is.null(ao@cellColData[[cluster.ident]])) {
+    stop("is.null(ao@cellColData[[cluster.ident]])")
+  }
+  clusters <- names(ref.da) %>% sub(paste0(cluster.ident, "_", "", .))
+  not.found <- clusters %>% .[!. %in% getCellColData(ao, cluster.ident, drop = T)]
+  if (length(not.found) > 0) {
+    stop(paste0("clusters not found in ao: ", 
+                paste0(not.found, collapse = ", ")))
+  }
+  da <- utilsFanc::safelapply(ref.da, function(ref.s2b) {
+    cluster <- ref.s2b$root.name %>% sub(paste0(cluster.ident, "_", "", .))
+    peaks <- ref.s2b$bulkNorm$gene
+    work.dir <- paste0(work.dir, "/", ref.s2b$root.name)
+    da <- ao.2.bulk.list(ao = ao, peakmat = peakmat[peaks, ], pseudo = F, 
+                         filter.nz = F, filter.size = NULL, filter.samples = NULL,
+                         quantile.norm = quantile.norm,
+                         coldata.columns = colnames(ref.s2b$coldata), 
+                         cluster.ident = cluster.ident, clusters = cluster, 
+                         group.ident = "Sample", groups = rownames(ref.s2b$coldata), 
+                         design.formula = ref.s2b$dds@design, 
+                         contrast = contrast, do.plot = F, 
+                         work.dir = work.dir, threads = 1)
+    return(da[[1]])
+  }, threads = threads)
+  names(da) <- paste0("soup_", names(ref.da))
+  return(da)
+}
+s2b.deseq <- function(s2b.obj, quantile.norm = F,
+                      norm.method = "ratio", locfunc = NULL,
                       design, contrast=NULL, 
-                      use.ori = T, filter.nz = F, filter.size = NULL, sequential.filter = F,
+                      use.ori = T, filter.nz = F, filter.size = NULL,
+                      filter.fun = "max", filter.samples = NULL, sequential.filter = F,
+                      independentFiltering = T,
                       pca.ntop = NULL, pca.groupings = NULL,
                       try.hm = T, force.hm = F,
                       pca.blind = T, pca.add.hm = F, pca.add.3d = F,
@@ -446,38 +517,48 @@ s2b.deseq <- function(s2b.obj,
     s2b.obj$bulk.mat <- s2b.obj$bulk.mat %>% .[rowMin(.) > 0,]
   }
   if (!is.null(filter.size) ) {
-    max.vec <- rowMax(edgeR::cpm(s2b.obj$bulk.mat))
-
-    if (filter.size[1] <= 1)
-      filter.size[1] <- quantile(max.vec, filter.size[1])
-    if (filter.size[2] <= 1) {
-      if (sequential.filter == T) {
-        filter.size[2] <- quantile(max.vec %>% .[. > filter.size[1]], filter.size[2])
-      } else {
-        filter.size[2] <- quantile(max.vec, filter.size[2])
-      }
-    }
-      
-    bPass <- (max.vec > filter.size[1] & max.vec < filter.size[2])
-    trash <- rank.plot(df = data.frame(max = max.vec), vars = "max",
-                       add.h.line = filter.size, title = sum(bPass),
-                       outfile = paste0(plot.dir,"/", s2b.obj$root.name,"_max.rank.png"),
-                       quantile.limit.y = 0.999)
-    
-    trash <- rank.plot(df = data.frame(max = max.vec), vars = "max", 
-                       add.h.line = filter.size, title = sum(bPass),
-                       transformation = function(x) log2(x + 1), 
-                       outfile = paste0(plot.dir, "/", s2b.obj$root.name, "_max.rank.log.png"))
-
-    s2b.obj$bulk.mat <- s2b.obj$bulk.mat %>% .[max.vec > filter.size[1] & max.vec < filter.size[2],] 
+    filtered <- s2b.obj$bulk.mat %>%
+      deseq2.filter(filter.size = filter.size, filter.fun = filter.fun,
+                    filter.samples = filter.samples, sequential.filter = sequential.filter, 
+                    plot.dir = plot.dir, root.name = s2b.obj$root.name)
+    s2b.obj$bulk.mat <- filtered$mat
   }
+
+  if (quantile.norm == T) {
+    s2b.obj$bulk.mat.qn <- qn.fanc(s2b.obj$bulk.mat, T)
+    mat.to.use <- s2b.obj$bulk.mat.qn %>% round()
+    print("quantile normalization")
+  } else {
+    mat.to.use <- s2b.obj$bulk.mat
+  }
+  # if (Sys.getenv("HOME") == "/bar/cfan") {
+  #   stop("to self: validate the numeric column removal step!")
+  # }
   
-  dds <- DESeq2::DESeqDataSetFromMatrix(countData = s2b.obj$bulk.mat, colData = s2b.obj$coldata, design = design)
+  # debugging purpose:
+  # s2b.obj$coldata$t <- as.numeric(s2b.obj$coldata$t)
+  
+  num.cols <- sapply(1:ncol(s2b.obj$coldata), function(i) return(is.numeric(s2b.obj$coldata[, i])))
+  num.cols <- colnames(s2b.obj$coldata)[num.cols]
+
+  if (length(num.cols) > 0) {
+    stop(paste0("numeric columns detected: ", paste0(num.cols, collapse = "; "),
+                ". Contact Changxu Fan if you think this is a false alarm."))
+  }
+  dds <- DESeq2::DESeqDataSetFromMatrix(countData = mat.to.use, colData = s2b.obj$coldata, design = design)
   
   if (single.sample == T) {
-    dds <- DESeq2::estimateSizeFactors(dds, type = "ratio")
+    dds <- DESeq2::estimateSizeFactors(dds, type = norm.method)
   } else {
-    dds <- DESeq2::DESeq(dds, test = "Wald", fitType = "local", sfType = "ratio") 
+    if (! is.null(locfunc)) {
+      print("using non-median locfunc")
+      dds <- estimateSizeFactors(dds, type = norm.method, locfunc = locfunc)
+      dds <- estimateDispersions(dds, fitType = "local")
+      dds <- nbinomWaldTest(object = dds)
+    } else {
+      print("using median locfunc")
+      dds <- DESeq2::DESeq(dds, test = "Wald", fitType = "local", sfType = norm.method) 
+    }
   }
   s2b.obj[["dds"]]  <- dds
   # counts <- SummarizedExperiment::assay(dds) %>% as.matrix()
@@ -513,7 +594,8 @@ s2b.deseq <- function(s2b.obj,
     
   }
   if (!is.null(contrast)) {
-    s2b.obj[["res"]] <- DESeq2::results(object = dds, contrast = contrast)
+    s2b.obj[["res"]] <- DESeq2::results(object = dds, contrast = contrast, 
+                                        independentFiltering = independentFiltering)
     # res.exp means "result.expanded"
     s2b.obj[["res.exp"]] <- deseq2.add.value(dds=s2b.obj$dds, res=s2b.obj$res, sample.order = sample.order)
     rownames(s2b.obj[["res.exp"]]) <- NULL
@@ -576,10 +658,19 @@ deseq2.add.value <- function(dds, res, sample.order= NULL) {
 
 }
 
-# s2b.add.shrink <- function(s2b, ) {
-#   
-# }
-
+deseq2.shrink <- function(pbl, slot.name, clusters = NULL, threads = 1) {
+  print("note: a2bl.add.shrinkage does the same thing as deseq2.shrink")
+  if (is.null(clusters))
+    clusters <- names(pbl)
+  pbl <- utilsFanc::safelapply(pbl, function(s2b) {
+    if (! s2b$root.name %in% clusters) {
+      return(s2b)
+    }
+    s2b[[slot.name]] <- lfcShrink(dds = s2b$dds, res = s2b$res, type = "ashr")
+    return(s2b)
+  }, threads = threads)
+  return(pbl)
+}
 hm.core <- function(plot.mat, res.exp, genes, meta.include,
                     samples, sample.info, dense.hm = T, 
                     add.basemean = F, sample.order = NULL, 
@@ -597,8 +688,9 @@ hm.core <- function(plot.mat, res.exp, genes, meta.include,
   res.exp <- res.exp[genes,]
   
   if (is.character(gene.order )) {
-    gene.order <- plot.mat %>% .[rev(order(.[, gene.order])),] %>% rownames()
+    gene.order <- plot.mat %>% .[rev(order(utilsFanc::pmean(.[, gene.order]))),] %>% rownames()
   }
+  
   sa <- ComplexHeatmap::HeatmapAnnotation(
     df = sample.info[samples, meta.include]
   )
@@ -622,9 +714,138 @@ hm.core <- function(plot.mat, res.exp, genes, meta.include,
   return(hm)
 }
 
+
+hm.core.2 <- function(s2b = NULL, 
+                      plot.mat, res.exp, 
+                      genes = NULL, samples = NULL, 
+                      col.data, metas = NULL, split.scaling.by = NULL,
+                      sample.order = NULL, gene.order = NULL, pivots = NULL, 
+                      dense.hm = T, dense.cutoff = 30, show.row.names = T, show.row.dend = T,
+                      add.basemean = F, 
+                      plot.out = NULL, 
+                      width = NULL, height = NULL, res = 100,
+                      ...) {
+  
+  if (!is.null(s2b)) {
+    exp.mat <- s2b$bulkNorm %>% `rownames<-`(., .$gene) %>% .[, !colnames(.) %in% "gene"]
+    res.exp <- s2b$res.exp %>% `rownames<-`(., .$gene)
+    if (is.null(genes)) {
+      if (!is.null(s2b$summary)) {
+        genes <- s2b$summary$de.genes
+      } else {
+        stop("when genes are not specified, the summary slot must be present in s2b")
+      }
+    }
+    # importantly, keep plot.mat and res.exp in sync
+    genes <- genes %>% .[. %in% rownames(exp.mat)]
+    if (length(genes) < 1) {
+      stop("length(genes) < 1")
+    }
+    exp.mat <- exp.mat[genes, ]
+    res.exp <- res.exp[genes, ]
+    col.data <- s2b$coldata %>% as.data.frame() 
+    metas <- colnames(col.data)
+    if (!is.null(split.scaling.by)) {
+      plot.mat <- col.data %>% filter(sample %in% colnames(exp.mat)) %>% 
+        split(., f = .[, split.scaling.by]) %>% 
+        lapply(function(df) {
+          exp.mat[, df$sample] %>% t() %>% scale(center = T, scale = T) %>% t() %>% 
+            return()
+        }) %>% Reduce(cbind, .)
+
+    } else {
+      plot.mat <- exp.mat %>% t() %>% scale(center = T, scale = T) %>% t()
+    }
+    
+  }
+  
+  if (nrow(plot.mat) < 1) {
+    print("nrow(plot.mat) < 1")
+    return()
+  }
+  
+  if (is.null(genes)) {
+    genes <- rownames(plot.mat)
+    # must have the genes variable to sync things
+  }
+  utilsFanc::check.intersect(genes, "genes", rownames(plot.mat), "rownames(plot.mat)")
+  plot.mat <- plot.mat[genes,]
+  
+  if (!is.null(sample.order)) {
+    samples <- sample.order
+  }
+  if (is.null(samples)) {
+    samples <- colnames(plot.mat)
+  }
+  utilsFanc::check.intersect(samples, "samples", colnames(plot.mat), "colnames(plot.mat)")
+  plot.mat <- plot.mat[, samples]
+    
+  if (dense.hm == T && length(genes) > dense.cutoff) {
+    show.row.names <- F
+    show.row.dend <- F
+  }
+  
+
+  hm.param <- list(matrix = plot.mat, show_row_names = show.row.names, 
+                   show_row_dend = show.row.dend, ...)
+  
+  if (!is.null(metas)) {
+    utilsFanc::check.intersect(x = samples, "samples", rownames(col.data), "rownames(col.data)")
+    colors <- lapply(col.data[samples, metas], function(meta) {
+      meta <- unique(meta)
+      color.map <- utilsFanc::gg_color_hue(length(meta))
+      names(color.map) <- meta %>% as.character()
+      return(color.map)
+    })
+    
+    sa <- ComplexHeatmap::HeatmapAnnotation(
+      df = col.data[samples, metas], # this is a trick to add multiple annotations at the same time
+      col = colors
+    )
+    hm.param[["top_annotation"]] <- sa
+  }
+  
+  if (is.character(pivots)) {
+    stop("pivots not tested")
+    gene.order <- plot.mat %>% .[rev(order(utilsFanc::pmean(.[, pivots]))),] %>% rownames()
+  }
+  
+  if (!is.null(sample.order))
+    hm.param[["column_order"]] <- sample.order
+  if (!is.null(gene.order))
+    hm.param[["row_order"]] <- gene.order
+  if (add.basemean == T) {
+    utilsFanc::check.intersect(genes, "genes", res.exp$gene, "res.exp$gene")
+    rownames(res.exp) <- res.exp$gene
+    baseMean <- res.exp[genes, "baseMean"]
+    baseMean <- utilsFanc::log2pm(baseMean)
+    ea <- ComplexHeatmap::rowAnnotation(log2mean = ComplexHeatmap::anno_barplot(baseMean),
+                                        annotation_name_rot = 90)
+    # manually validated that the pairing between baseMean bars and rows are correct.
+    hm.param[["right_annotation"]] <- ea
+  }
+  
+  hm <- do.call(ComplexHeatmap::Heatmap, hm.param)
+  if (!is.null(plot.out)) {
+    if (is.null(height)) {
+      n.lines <- nrow(plot.mat) + length(metas) + 1
+      height <- 20 * n.lines + 100
+    }
+    if (is.null(width)) {
+      width <- ncol(plot.mat) * 20 + 450
+    }
+    
+    save.base.plot(p = hm, file = plot.out, width = width, height = height, res = res)
+  }
+  
+  
+  return(hm)
+}
+
 exp.hm <- function(res.exp, outlist = NULL, sample.info, sample.order=NULL, 
-                   meta.include=NULL, p.adj.cutoff, p.cutoff, samples = NULL,
-                   title = character(0), pivots = NULL) {
+                   meta.include=NULL, p.adj.cutoff = NULL, p.cutoff = NULL, samples = NULL,
+                   title = character(0), pivots = NULL,
+                   plot.all = F) {
   if (is.character(sample.info))
     sample.info <- read.table(sample.info, as.is = T, header = T)
   rownames(sample.info) <- sample.info$sample
@@ -646,8 +867,9 @@ exp.hm <- function(res.exp, outlist = NULL, sample.info, sample.order=NULL,
                          gene.order = NULL, outlist = NULL, sub.name, root.name.internal, ...) {
     hm <- hm.core(plot.mat = plot.mat, res.exp = res.exp, genes = genes, sample.order = sample.order, 
                   sample.info = sample.info, meta.include = meta.include, samples = samples,
-                  gene.order = gene.order, heatmap_width = unit(5, "inches"), 
-                  heatmap_height = unit(8, "inches"),
+                  gene.order = gene.order,
+                  # heatmap_width = unit(5, "inches"), 
+                  # heatmap_height = unit(8, "inches"),
                   dense.hm = dense.hm, add.basemean = add.basemean, ...)
     if (!is.null(outlist)) {
       png(filename = utilsFanc::plot.name.construct(outlist = outlist,
@@ -660,38 +882,48 @@ exp.hm <- function(res.exp, outlist = NULL, sample.info, sample.order=NULL,
     return(hm)
     
   }
+  if (plot.all == T) {
+    genes <- plot.mat %>% na.omit() %>% rownames()
+    trash <- hm.core.ez(genes, dense.hm = T, add.basemean = F,
+                        column_title = title, outlist = outlist,
+                        sub.name = "all_genes_hm.png", root.name.internal = "")
+  }
+  if (!is.null(p.adj.cutoff)) {
+    genes.padj <- res.exp %>% filter(padj <= p.adj.cutoff ) %>% pull(gene)
+    
+    hm <- hm.core.ez(genes.padj, dense.hm = F, add.basemean = T,
+                     column_title = title, outlist = outlist,
+                     sub.name = "p_adj_" %>% paste0(p.adj.cutoff,"_clust_hm.png"), 
+                     root.name.internal = "")
+    
+  }
   
-  genes <- plot.mat %>% na.omit() %>% rownames()
-  trash <- hm.core.ez(genes, dense.hm = T, add.basemean = F,
-                      column_title = title, outlist = outlist,
-                      sub.name = "all_genes_hm.png", root.name.internal = "")
-  
-  genes.padj <- res.exp %>% filter(padj <= p.adj.cutoff ) %>% pull(gene)
-  
-  hm <- hm.core.ez(genes.padj, dense.hm = F, add.basemean = T,
-                   column_title = title, outlist = outlist,
-                   sub.name = "p_adj_" %>% paste0(p.adj.cutoff,"_clust_hm.png"), 
-                   root.name.internal = "")
-  
-  gene.p <- res.exp %>% filter(pvalue <= p.cutoff ) %>% pull(gene)
-  hm <- hm.core.ez(gene.p, dense.hm = T, add.basemean = T,
-                   column_title = title, outlist = outlist,
-                   sub.name = "p_" %>% paste0(p.cutoff,"_clust_hm.png"), 
-                   root.name.internal = "")
+  if (!is.null(p.cutoff)) {
+    gene.p <- res.exp %>% filter(pvalue <= p.cutoff ) %>% pull(gene)
+    hm <- hm.core.ez(gene.p, dense.hm = T, add.basemean = T,
+                     column_title = title, outlist = outlist,
+                     sub.name = "p_" %>% paste0(p.cutoff,"_clust_hm.png"), 
+                     root.name.internal = "")
+  }
   
   t.f <- function() {
     if (!is.null(pivots) && !is.null(sample.order)) {
       for (s in pivots) {
-        trash <- hm.core.ez(genes.padj, dense.hm = F, add.basemean = T,
-                            sample.order = sample.order, gene.order = s,
-                            column_title = title, outlist = outlist,
-                            sub.name = paste0("p_adj_",p.adj.cutoff,"_",s,"_hm.png"), 
-                            root.name.internal = "")
-        trash <- hm.core.ez(gene.p, dense.hm = T, add.basemean = T,
-                            sample.order = sample.order, gene.order = s,
-                            column_title = title, outlist = outlist,
-                            sub.name = paste0("p_",p.adj.cutoff,"_",s,"_hm.png"),  
-                            root.name.internal = "")
+        if (!is.null(p.adj.cutoff)) {
+          trash <- hm.core.ez(genes.padj, dense.hm = F, add.basemean = T,
+                              sample.order = sample.order, gene.order = s,
+                              column_title = title, outlist = outlist,
+                              sub.name = paste0("p_adj_",p.adj.cutoff,"_",s,"_hm.png"), 
+                              root.name.internal = "")
+          
+        }
+        if (!is.null(p.cutoff)) {
+          trash <- hm.core.ez(gene.p, dense.hm = T, add.basemean = T,
+                              sample.order = sample.order, gene.order = s,
+                              column_title = title, outlist = outlist,
+                              sub.name = paste0("p_",p.adj.cutoff,"_",s,"_hm.png"),  
+                              root.name.internal = "")
+        }
       }
     }
     
@@ -701,6 +933,7 @@ exp.hm <- function(res.exp, outlist = NULL, sample.info, sample.order=NULL,
   
   return()
 }
+
 
 s2b.plus.deseq <- function(so, assay, slot, cells=NULL, ident, sub.idents, 
                            group.by, groups = NULL, coldata.columns, design, contrast = NULL) {
@@ -734,14 +967,25 @@ bulk.list <- function(so = NULL, # pbl = NULL,
                       coldata.columns = NULL, design.formula, contrast,
                       cluster.ident = "seurat_clusters", clusters = NULL,
                       filter.nz = T, filter.size = NULL, sequential.filter = T,
+                      independentFiltering = T,
                       pca.ntop = 10000, pca.groupings = NULL,
                       p.adj.cutoff = 0.05, p.cutoff =0.05, 
                       single.sample = F,
-                      do.plot = F, work.dir, plot.dir=NULL, threads = NULL, save.rds = T) {
+                      do.plot = F, work.dir, plot.dir=NULL,
+                      threads = NULL, stop.on.error = T, # biocparallel
+                      save.rds = T) {
   # you can either start from so or pbl. pbl: pseudobulk list. in the latter case you are just adding
   #the deseq2 component.
   system("mkdir -p " %>% paste0(work.dir, " "))
+  if (is.null(plot.dir)) {
+    plot.dir <- paste0(work.dir, "/plots/")
+  }
+  if (is.null(cluster.ident)) {
+    cluster.ident <- "pd_cluster"
+    so[[cluster.ident]] <- "0"
+  }
   meta.df <- so@meta.data %>% factor2character.fanc()
+  
   if (is.null(clusters)) {
     clusters <- meta.df[, cluster.ident] %>% unique() %>% gtools::mixedsort()
   }
@@ -755,29 +999,36 @@ bulk.list <- function(so = NULL, # pbl = NULL,
   }
   threads <- min(12, threads)
   
-  bulk.all.list <- utilsFanc::safelapply(clusters, function(cluster) {
-    # try({
-    bulk.all <- so.2.bulk(so, root.name = paste0(cluster.ident, "_", cluster), assay = assay, slot= slot, 
-                          ident = cluster.ident, sub.idents = cluster,
+  par.param <- MulticoreParam(workers = threads, stop.on.error = stop.on.error)
+  bulk.all.list <- bptry({
+    bplapply(clusters, function(cluster) {
+      bulk.all <- so.2.bulk(so, root.name = paste0(cluster.ident, "_", cluster), assay = assay, slot= slot, 
+                            ident = cluster.ident, sub.idents = cluster,
                             group.by = group.by, groups = groups, coldata.columns = coldata.columns)
-    if (deseq2 == T) {
-      bulk.all <- s2b.deseq(s2b.obj = bulk.all, design = design.formula , contrast = contrast,
-                            filter.nz = filter.nz, filter.size = filter.size, sequential.filter = sequential.filter,
-                            pca.ntop = pca.ntop, pca.groupings = pca.groupings,
-                            force = T, sample.order = sample.order, try.hm = do.plot,
-                            plot.dir = plot.dir, 
-                            outlist = list(plot.dir = plot.dir, root.name.external = "cluster_" %>% paste0(cluster, "_")), 
-                            p.adj.cutoff = p.adj.cutoff, p.cutoff = p.cutoff,
-                            title = paste0("cluster_", cluster), single.sample = single.sample,
-                            pivots = NULL)
-    }
-
-      # rm(list = ls() %>% .[!. == "bulk.all"])
-      # gc()
+      
+      if (deseq2 == T) {
+        bulk.all <- s2b.deseq(s2b.obj = bulk.all, design = design.formula , contrast = contrast,
+                              filter.nz = filter.nz, filter.size = filter.size, sequential.filter = sequential.filter,
+                              independentFiltering = independentFiltering,
+                              pca.ntop = pca.ntop, pca.groupings = pca.groupings,
+                              force = T, sample.order = sample.order, try.hm = do.plot,
+                              plot.dir = plot.dir, 
+                              outlist = list(plot.dir = plot.dir, root.name.external = "cluster_" %>% paste0(cluster, "_")), 
+                              p.adj.cutoff = p.adj.cutoff, p.cutoff = p.cutoff,
+                              title = paste0("cluster_", cluster), single.sample = single.sample,
+                              pivots = NULL)
+        
+      }
       return(bulk.all)
-    # })
-  }, threads = threads)
+    }, BPPARAM = par.param)
+  })
+  if ("error" %in% class(bulk.all.list)) {
+    stop(bulk.all.list$message)
+  }
+  # bulk.all.list <- utilsFanc::safelapply(clusters, function(cluster) {
+  # }, threads = threads)
   names(bulk.all.list) <- paste0(cluster.ident, "_", clusters)
+  attr(bulk.all.list, "work.dir") <- work.dir
   if (save.rds == T)
     saveRDS(bulk.all.list, paste0(work.dir, "/bulk.list.Rds"))
   return(bulk.all.list)
@@ -857,3 +1108,179 @@ aggregate.fanc <- function(mat, se.assay.name = NULL, margin, groupings, na.rm =
   return(res)
 }
 
+deseq2.filter <- function(mat, filter.size, filter.fun, filter.samples, sequential.filter = T,
+                          plot.dir, root.name) {
+  cpm.mat <- edgeR::cpm(mat)
+  if (!is.null(filter.samples)) {
+    cpm.mat <- cpm.mat %>% .[, colnames(.) %in% filter.samples]
+    print(paste0("using these samples for filtering: \n",
+                 paste0(filter.samples, collapse = "\n")))
+  }
+  if (filter.fun == "max") {
+    filter.vec <- rowMax(cpm.mat)
+  } else if (filter.fun == "mean") {
+    filter.vec <- rowMeans(cpm.mat)
+  } else {
+    stop("filter.fun not recoganized. has to be 'max' or 'mean'")
+  }
+  
+  if (filter.size[1] < 1)
+    filter.size[1] <- quantile(filter.vec, filter.size[1])
+  if (filter.size[2] <= 1) {
+    if (sequential.filter == T) {
+      filter.size[2] <- quantile(filter.vec %>% .[. > filter.size[1]], filter.size[2])
+    } else {
+      filter.size[2] <- quantile(filter.vec, filter.size[2])
+    }
+  }
+  
+  bPass <- (filter.vec > filter.size[1] & filter.vec < filter.size[2])
+  trash <- rank.plot(df = data.frame(value = filter.vec) %>% `colnames<-`(filter.fun), vars = filter.fun,
+                     add.h.line = filter.size, title = sum(bPass),
+                     outfile = paste0(plot.dir,"/", root.name,"_", filter.fun,"_", 
+                                      filter.size[1], "_", filter.size[2],".rank.png"),
+                     quantile.limit.y = 0.999)
+  
+  trash <- rank.plot(df = data.frame(value = filter.vec) %>% `colnames<-`(filter.fun), vars = filter.fun, 
+                     add.h.line = filter.size, title = sum(bPass),
+                     transformation = function(x) log2(x + 1), 
+                     outfile = paste0(plot.dir, "/", root.name, "_", filter.fun, "_", 
+                                      filter.size[1], "_", filter.size[2],".rank.log.png"))
+  res <- list(mat = mat[bPass, ], mat.cpm = cpm.mat[bPass, ], 
+              filter.size = filter.size, filter.fun = filter.fun, filter.samples = filter.samples,
+              sequential.filter = sequential.filter,
+              root.name = root.name)
+  return(res)
+}
+
+mat.xy <- function(mat, plot.out = NULL, trend = T, ...) {
+  if (trend == T ) {
+    mat <- mat %>% .[sample(1:nrow(.), 10000, replace = F),]
+  }
+  p <- mat %>% as.data.frame() %>% 
+    xy.plot(x = "BM", y = "SP", is.regex = T, color.density = T, ...)
+  if (trend == T) {
+    p <- p + geom_smooth(method = "loess")
+  }
+  if (!is.null(plot.out)) {
+    wrap.plots.fanc(plot.list = list(p), plot.out = plot.out)
+  }
+  return(p)
+}
+
+
+deseq2.topn.norm <- function(dds, topn.vec, plot.dir, root.name) {
+  counts <- counts(dds)
+  counts.cpm <- edgeR::cpm(counts)
+  norm.mats <- lapply(topn.vec, function(n) {
+    cutoff <- counts.cpm %>% rowMeans() %>% sort() %>% rev() %>% .[n]
+    bCg <- counts.cpm %>% rowMeans() %>% `>=`(cutoff)
+    cg <- rownames(counts.cpm)[bCg]
+    dds <- estimateSizeFactors(dds, controlGenes=bCg)
+    norm.mat <- counts(object = dds, normalized = T)
+    df <- norm.mat %>% as.data.frame()
+    df$gene <- rownames(df)
+    lapply(c("hl", "noHl"), function(type) {
+      params <- list(mat = df, plot.out = paste0(plot.dir, "/", root.name, "_", n, "_", type, "_xy.png"), trend = F)
+      if (type == "hl") {
+        params <- c(params, list(highlight.var = "gene", highlight.values = cg))
+      }
+      p <- do.call(mat.xy, params)
+    })
+    return(norm.mat)
+  })
+  return(norm.mats)
+}
+
+qn.fanc <- function(mat, ori.size) {
+  qn <- preprocessCore::normalize.quantiles(x = mat)
+  if (ori.size == T) {
+    qn <- qn %*% diag((colSums(mat)/colSums(qn)))
+  }
+  rownames(qn) <- rownames(mat)
+  colnames(qn) <- colnames(mat)
+  return(qn)
+}
+
+s2b.hm.single.gene <- function(so, assay, slot, 
+                               group.ident.1, groups.1 = NULL, group.ident.2, groups.2 = NULL, 
+                               genes, 
+                               plot.ind = T,
+                               plot.dir, root.name = NULL) {
+  if (is.null(root.name)) {
+    root.name <- basename(plot.dir)
+  }
+  # group.ident.1: first layer, group.idetn.2: second layer. 
+  # you can imagine: colnames(mat) to be in the format of group.ident.1..group.ident.2
+  
+  #############
+  ## incorrect: normalization was done individually by DESeq2...
+  # mats <- lapply(s2bl, function(s2b) {
+  #   if (is.null(samples)) {
+  #     samples <- s2b$bulkNorm %>% colnames() %>%  .[.!= "gene"]
+  #   }
+  #   samples <- samples %>% .[. %in% colnames(s2b$bulkNorm)]
+  #   genes <- genes %>% .[.%in% s2b$bulkNorm$gene]
+  #   
+  #   rownames(s2b$bulkNorm) <- s2b$bulkNorm$gene
+  #   mat <- s2b$bulkNorm %>% .[, colnames(.) != "gene"] %>% as.matrix()
+  #   mat <- mat[genes, samples]
+  #   colnames(mat) <- paste0(s2b$root.name %>% sub("seurat_clusters_", "", .), "_", colnames(mat))
+  #   return(mat)
+  # })
+  # genes <- Reduce(intersect, lapply(mats, rownames))
+  # if (length(genes) < 1) {
+  #   stop("length(genes) < 1")
+  # }
+  # 
+  # mat <- lapply(mats, function(x) return(x[genes, ])) %>% 
+  #   Reduce(cbind, .)
+  
+  groupings <- get.cell.list(obj = so, is.ao = F, split.by = group.ident.2, splits = groups.2,
+                             group.by = group.ident.1, groups = groups.1, na.rm = T, return.named.vec = T)
+  
+  mat.big <- Seurat::GetAssayData(object = so, slot = slot, assay = assay)
+  
+  mat <- aggregate.fanc(mat = mat.big, margin = 2, groupings = groupings, 
+                             na.rm = T, take.mean = T, sort = T)
+  genes <- genes %>% .[. %in% rownames(mat)]
+  mat <- mat[genes,]
+  # we first write out mat:
+  mat.df <- cbind(data.frame(gene = rownames(mat)), as.data.frame(mat))
+  dir.create(plot.dir, showWarnings = F, recursive = T)
+  write.table(mat.df, paste0(plot.dir, "/", root.name, "_norm_mat.tsv"), 
+              col.names = T, row.names = F, sep = "\t", quote = F)
+  mat.scale <- mat %>% t() %>% scale() %>% t()
+  dimnames(mat.scale) <- dimnames(mat)
+  hm <- ComplexHeatmap::Heatmap(matrix = mat.scale, cluster_rows = T, cluster_columns = F,
+                                show_row_dend = F, clustering_distance_rows = "pearson")
+  save.base.plot(hm, file = paste0(plot.dir, "/", root.name, "_norm_scaled_hm.pdf"), 
+                 width = 600, height = 15 * nrow(mat.scale) + 150)
+  
+  # now we plot individual ones:
+  if (plot.ind) {
+    ind.dir <- paste0(plot.dir, "/", root.name, "_ind/")
+    pl <- lapply(genes, function(gene) {
+      col_fun = circlize::colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+      mat.gene <- mat.scale[gene, , drop = F]
+      hm <- ComplexHeatmap::Heatmap(matrix = mat.gene, cluster_rows = F, cluster_columns = F, col = col_fun,
+                                    column_names_side = "top")
+      save.base.plot(hm, file = paste0(ind.dir, "/", root.name, "_", gene, "_hm.png"), 
+                     width = 600, height = 150)
+      df <- data.frame(sample = colnames(mat.gene), expr = mat[gene, ])
+      df$sample <- factor(df$sample, levels = rev(df$sample))
+      p <- ggplot(df, aes(x = sample, y = expr)) +
+        geom_bar(stat = "identity", color = "gray50", fill = "gray50") + 
+        coord_flip() + 
+        # theme(axis.line.x = element_blank(), axis.title.x = element_blank(), axis.text.x =  element_blank(),
+        #       axis.ticks.x = element_blank()) +
+        theme_void() +
+        ggtitle(gene) +
+        ggsave(paste0(ind.dir, "/", root.name, "_", gene, "_bar.png"), width = 1, height = 5)
+      return(p)
+    })
+    trash <- wrap.plots.fanc(plot.list = pl, sub.height = 5, sub.width = 1, 
+                             plot.out = paste0(plot.dir, "/", root.name, "_norm_bar.png"))
+  }
+  return(mat)
+}

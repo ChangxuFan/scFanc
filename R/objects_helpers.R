@@ -76,28 +76,7 @@ rbind.fanc <- function(df1, df2) {
   return(rbind(df1, df2))
   
 }
-# int.corr <- function(q, s, meta) {
-#   # sync sample
-#   q <- q@meta.data
-#   s <- s@meta.data
-#   q.sample <- q$sample %>% as.character() %>% unique()
-#   s.sample <- s$sample %>% as.character() %>% unique()
-#   f.sample <- intersect(q.sample, s.sample)
-#   
-#   q <- q[q$sample %in% f.sample, ]
-#   s <- s[s$sample %in% f.sample, ]
-#   
-#   q$cells <- rownames(q) %>% sub("_.+$", "",.)
-#   s$cells <- rownames(s) %>% sub("_.+$", "",.)
-#   
-#   stats <- q %>% split(., f=factor(.[, meta])) %>% 
-#     lapply(function(x) {
-#       cells <- rownames(x) 
-#       s.sub <- s[cells, ]
-#       return(table(s.sub[, meta]))
-#     })
-#   return(stats)
-# }
+
 
 int.corr <- function(q.vec, s, meta, out.file = NULL) {
   s <- s@meta.data %>% factor2character.fanc()
@@ -110,8 +89,8 @@ int.corr <- function(q.vec, s, meta, out.file = NULL) {
     q <- q[q$sample %in% f.sample, ]
     s <- s[s$sample %in% f.sample, ]
     
-    q$cells <- rownames(q) %>% sub("_.+$", "",.)
-    s$cells <- rownames(s) %>% sub("_.+$", "",.)
+    q$cells <- rownames(q)
+    s$cells <- rownames(s)
     # sync q and s so that pipe doesn't error out when some cells are missing:
     f.cells <- intersect(q$cells, s$cells)
     q <- q[q$cells %in% f.cells,]
@@ -141,8 +120,9 @@ int.corr <- function(q.vec, s, meta, out.file = NULL) {
   stats.full <- stats.full[gtools::mixedsort(rownames(stats.full)), gtools::mixedsort(colnames(stats.full))]
   stats.full$total <- apply(stats.full, 1, sum)
   stats.full["total", ] <- apply(stats.full, 2, sum)
+  stats.full <- cbind(data.frame(samples = rownames(stats.full)), stats.full)
   if (!is.null(out.file)) {
-    write.table(stats.full, out.file, quote = F, row.names = T, col.names = T, sep = "\t")
+    write.table(stats.full, out.file, quote = F, row.names = F, col.names = T, sep = "\t")
   }
   return(stats.full)
 
@@ -233,7 +213,9 @@ vln.depth.2 <- function(so = NULL, ao = NULL, bc.metrics.file.list = NULL, plot.
     so <- add.metrics.seurat(so = so, bc.metrics.file.list = bc.metrics.file.list,
                            columns.to.add = cellranger.metas)
   if (!is.null(ao)) {
-    so <- seurat.add.archr.meta(so = so, ao = ao,metas = archr.metas)
+    if (!is.null(archr.metas))
+      so <- seurat.add.archr.meta(so = so, ao = ao,metas = archr.metas)
+    
     if (!is.null(ao.embedding)) {
       so <- seurat.add.archr.embed(so = so, ao = ao, ao.embedding = ao.embedding)
       embedding <- paste0("ArchR", ao.embedding)
@@ -637,9 +619,10 @@ int.corr.plot <- function(soi, sol, samples = NULL,
   return()
 }
 
-get.cell.list <- function(obj, is.ao = F, cells.include = NULL,
+get.cell.list <- function(obj, is.ao = F, cells.include = NULL, n.cells.each = NULL,
                           split.by = NULL, splits = NULL, group.by, groups = NULL,
                           na.rm = T, return.named.vec = F) {
+  print ("using get.cell.list. a similar function is archr.get.cells.grid()")
   if (is.ao == F) {
     # obj is so
     df <- obj@meta.data[, c(split.by, group.by), drop = F] %>% factor2character.fanc()
@@ -669,6 +652,13 @@ get.cell.list <- function(obj, is.ao = F, cells.include = NULL,
   }
     
   cell.list <- split(df$cells, f = df$key)
+  if (!is.null(n.cells.each)) {
+    cell.list <- lapply(cell.list, function(x) {
+      if (length(x) > n.cells.each)
+        x <- sample(x, size = n.cells.each, replace = F)
+      return(x)
+    })
+  }
   if (return.named.vec == T) {
     res <- list.switch.name(cell.list)
   } else {
@@ -876,3 +866,18 @@ so.label.pos.cells <- function(so, genes, meta.name, pos.name, neg.name = NA,
   so[[meta.name]] <- named.vec
   return(so)
 }
+
+so.balance.cell.number <- function(so, ident = "seurat_clusters", n) {
+  cells <- so@meta.data %>% mutate(., cellNames = rownames(.)) %>% 
+    dplyr::group_by(!!as.name(ident)) %>% 
+    slice_sample(n = n, replace = F) %>% ungroup() %>% pull(cellNames)
+  so <- so[, colnames(so) %in% cells]
+  return(so)
+}
+
+outer.paste <- function(string.list, sep = "..") {
+  Reduce(function(x, y) outer(x, y, FUN = function(x, y) paste(x,y, sep = "..")),
+         string.list) %>% as.character() %>% return()
+}
+
+

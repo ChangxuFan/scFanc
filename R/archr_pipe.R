@@ -8,7 +8,7 @@ add.umap.fanc <- function(ao) {
 
 }
 ao.gen <- function(frag.files = NULL, arrow.files = NULL, copy.arrow.files = "miao", force = F,
-                   minTSS = 4, minFrags = 1000,
+                   minTSS = 4, minFrags = 1000, addGeneScoreMat = T, addTileMat = T,
                    cells.list = NULL,  work.dir) {
   # cells: should be a list, each element corresponding to the cells from each arrow file
   # frag files need to be named as sample name
@@ -33,8 +33,8 @@ ao.gen <- function(frag.files = NULL, arrow.files = NULL, copy.arrow.files = "mi
           sampleNames = names(frag.files[i]),
           # filterTSS = filterTSS, #Dont set this too high because you can always increase later
           # filterFrags = filterFrags, 
-          addTileMat = TRUE,
-          addGeneScoreMat = TRUE, 
+          addTileMat = addTileMat,
+          addGeneScoreMat = addGeneScoreMat, 
           validBarcodes = cells.list[[i]], 
           minTSS = minTSS,
           minFrags = minFrags,
@@ -92,13 +92,17 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
                                use.matrix = "TileMatrix",
                                add.lsi = T, lsi.iterations = 2, lsi.res = 0.2, do.harmony = F,
                                add.cluster = T, add.umap = T,
-                               dimsToUse = NULL, 
+                               dimsToUse = NULL, dimsToUse.umap = NULL, dimsToUse.cluster = NULL, cluster.res = 0.8,
                                work.dir, plot.dir = NULL, 
                                use.reduced.dims = c("IterativeLSI", "Harmony"),
                                so.cluster.ident = "seurat_clusters", so.clusters = NULL, 
                                do.confusion.plot = T, do.binary.plot = T,
                                force = T,
                                sample.order = NULL, ...) {
+  if (!is.null(dimsToUse)) {
+    dimsToUse.umap <- dimsToUse
+    dimsToUse.cluster <- dimsToUse
+  }
   if (is.null(plot.dir))
     plot.dir <- paste0(work.dir, "/Plots")
   system(paste0("mkdir -p ", work.dir, " ", plot.dir))
@@ -116,7 +120,7 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
           # sampleCells = 10000, 
           n.start = 10
         ), 
-        dimsToUse = dimsToUse,
+        dimsToUse = 1:30,
         force = force, outDir = work.dir, ...
       )
     }
@@ -152,9 +156,9 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
           reducedDims = reducedDim,
           method = "Seurat",
           name = "Clusters",
-          resolution = 0.8,
+          resolution = cluster.res,
           force = force, 
-          dimsToUse = dimsToUse, 
+          dimsToUse = dimsToUse.cluster, 
         )
         saveRDS(ao, paste0(work.dir,"/ao_",reducedDim,".Rds"))
       }
@@ -171,7 +175,7 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
           force = force,
           saveModel = F, 
           seed = 122,
-          dimsToUse = dimsToUse,
+          dimsToUse = dimsToUse.umap,
         )
         saveRDS(ao, paste0(work.dir,"/ao_",reducedDim,".Rds"))
       }
@@ -187,7 +191,8 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
                       shuffle = T, root.name = reducedDim)
     
     if (do.binary.plot == T) {
-      plot.panel.list(panel.list = "Clusters", fake.so, order = F,assay = "RNA", binarize.panel = T, 
+      plot.panel.list(panel.list = "Clusters", fake.so, order = T,assay = "RNA", binarize.panel = T, 
+                      split.by = "Sample", split.order = sample.order,
                       raster = T, auto.adjust.raster.pt.size = F, pt.size = 0.5, 
                       plot.out = paste0(plot.dir, "/", reducedDim,"_UMAP_Clusters_binary.png"), 
                       page.limit = 100, ident = "Clusters")
@@ -198,7 +203,7 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
       seurat.plot.archr(ao = ao, ao.embedding = "UMAP", ao.name = "Sample", plot.dir = plot.dir,
                         shuffle = T, label = F, root.name = reducedDim)
       if (do.binary.plot == T) {
-        plot.panel.list(panel.list = "Sample", fake.so, order = F,assay = "RNA", binarize.panel = T, 
+        plot.panel.list(panel.list = "Sample", fake.so, order = T,assay = "RNA", binarize.panel = T, 
                         raster = T, auto.adjust.raster.pt.size = F, pt.size = 0.5, 
                         plot.out = paste0(plot.dir, "/", reducedDim,"_UMAP_Sample_binary.png"), 
                         page.limit = 100, ident = "Clusters")
@@ -243,13 +248,13 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
 archr.crosscheck.pipe <- function(ao, so, study.dir, samples, bc.metrics.file.list) {
   t.f.ao.so.qc(ao = ao, so = so, plot.dir = study.dir)
   
-  ao <- archr.add.seurat(ao = ao, so = so, as.factor = T)
-  seurat.plot.archr(ao = ao, ao.embedding = "UMAP", ao.name = "seurat_clusters", 
-                    plot.dir = paste0(study.dir, "/"))
-  
-  seurat.plot.archr(ao = ao[ ! is.na(ao$seurat_clusters),], ao.embedding = "UMAP", ao.name = "seurat_clusters", 
-                    plot.dir = paste0(study.dir, "/"), root.name = "ao_both")
-  trash <- vln.depth.2(so = NULL, ao = ao, bc.metrics.file.list = bc.metrics.file.list[samples], 
+  # ao <- archr.add.seurat(ao = ao, so = so, as.factor = T)
+  # seurat.plot.archr(ao = ao, ao.embedding = "UMAP", ao.name = "seurat_clusters", 
+  #                   plot.dir = paste0(study.dir, "/"))
+  # 
+  # seurat.plot.archr(ao = ao[ ! is.na(ao$seurat_clusters),], ao.embedding = "UMAP", ao.name = "seurat_clusters", 
+  #                   plot.dir = paste0(study.dir, "/"), root.name = "ao_both")
+  trash <- vln.depth.2(so = NULL, ao = ao, bc.metrics.file.list = NULL, 
               metas.plot = NULL,
               ident = "Clusters",
               plot.out = paste0(study.dir, "/metrics","/metrics.pdf"), 
@@ -514,7 +519,7 @@ t.f.ao.so.qc <- function(ao, so, plot.dir) {
   dir.create(plot.dir, showWarnings = F, recursive = T)
   stats <- data.frame(n.ao = length(getCellNames(ao)),
                       n.so = ncol(so))
-  so[["cells"]] <- paste0(so$sample, "#", colnames(so))
+  so[["cells"]] <- get.cell.names.seurat(so = so, style = "ArchR")
   both <- intersect(getCellNames(ao), so$cells)
   stats$n.both <- length(both)
   write.table(stats, paste0(plot.dir, "/stats.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
@@ -525,7 +530,7 @@ t.f.ao.so.qc <- function(ao, so, plot.dir) {
   tss.nfrag.df.both <- tss.nfrag.df %>% filter(cells %in% both)
   t.f.tss.nfrag.qc(tss.nfrag.df = tss.nfrag.df.both, outfile = paste0(plot.dir, "/tss_nfrag_both.png"))
   ao <- ao[getCellNames(ao) %in% both,]
-  ao <- archr.cluster.pipe(ao = ao, so = so, work.dir = paste0(plot.dir, "/both"), force = T)
+  # ao <- archr.cluster.pipe(ao = ao, so = so, work.dir = paste0(plot.dir, "/both"), force = T)
   
   return(ao)
 }

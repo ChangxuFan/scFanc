@@ -19,7 +19,7 @@ bg.gen.2 <- function(mat, fg.vec, n.bg.each, method = "euclidean", scale = "none
   if (!is.matrix(mat))
     mat <- as.matrix(mat)
   if (!is.null(samples.use)) {
-    mat <- mat[, samples.use]
+    mat <- mat[, samples.use, drop = F]
   }
   dup.fg.vec <- fg.vec %>% .[duplicated(.)]
   if (length(dup.fg.vec) > 0)
@@ -27,8 +27,8 @@ bg.gen.2 <- function(mat, fg.vec, n.bg.each, method = "euclidean", scale = "none
                 paste0(dup.fg.vec[1:5], collapse = "\n")))
 
   if (no.replace == T) {
-    mat.fg <- mat[rownames(mat) %in% fg.vec, ]
-    mat.bg <- mat[!rownames(mat) %in% fg.vec, ]
+    mat.fg <- mat[rownames(mat) %in% fg.vec, , drop = F]
+    mat.bg <- mat[!rownames(mat) %in% fg.vec, , drop = F]
     bg.list <- list()
     for (fg in fg.vec) {
       mat.sub <- rbind(mat.fg[fg,], mat.bg %>% .[!rownames(.) %in% unlist(bg.list),])
@@ -80,19 +80,31 @@ bg.gen.bin <- function(mat, n.bins, samples.use = NULL, return.df = F) {
   return(bg.list)
 }
 
-bg.assess <- function(mat, fg.vec, bg.vec, scatter.xy.df, 
+bg.assess <- function(mat, fg.vec, bg.vec = NULL, 
+                      scatter.xy.df, scatter.meta = NULL, col.data,
                       transformation = NULL, plot.out, return.pl = F, ...) {
   # scatter.xy.df: cols: x, y.
   df <- mat %>% as.data.frame()
   df$gene <- rownames(df)
   rownames(df) <- NULL
   gene.list <- list(fg = fg.vec, bg = bg.vec)
+  gene.list <- gene.list[!sapply(gene.list, is.null)]
   pl <- scatter.xy.df %>% unique() %>% split(., f = 1:nrow(.)) %>% 
     lapply(function(comp) {
       # comp: comparison
       pl <- lapply(names(gene.list), function(type) {
         genes <- gene.list[[type]]
-        p <- xy.plot(df = df, x = comp$x, y = comp$y, transformation = transformation,
+        
+        comp.meta <- scatter.meta
+        comp.l <- comp %>% as.list()
+        if (!is.null(comp.meta)) {
+          for (i in 1:length(comp.l)) {
+            samples.in.comp <- col.data %>% .[.[, comp.meta] %in% comp.l[[i]],] %>% rownames()
+            df[, comp.l[[i]]] <- df[, samples.in.comp] %>% utilsFanc::pmean()
+          }
+        }
+        
+        p <- xy.plot(df = df, x = comp.l$x, y = comp.l$y, transformation = transformation,
                      highlight.var = "gene", highlight.values = genes, show.highlight.color.var = F,
                      plotly.var = "gene", color.density = T, ...) +
           ggtitle(paste0(comp$y, ":", comp$x, "..", type))
@@ -253,8 +265,34 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
   return(res)
 }
 
-de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.topn = NULL, pbl.samples, pbl.clusters = NULL,
+de.2.gsea.txt <- function(pbl, pheno.col, out.dir) {
+  dir.create(path = out.dir, recursive = T, showWarnings = F)
+  lapply(pbl, function(s2b) {
+    s2b$bulkNorm <- s2b$bulkNorm %>% 
+      dplyr::mutate(DESCRIPTION = "na", gene = toupper(gene)) %>% 
+      dplyr::rename(NAME = "gene")
+    exp.df <- cbind(s2b$bulkNorm[, c("NAME", "DESCRIPTION")], 
+                s2b$bulkNorm %>% .[, ! colnames(.) %in% c("NAME", "DESCRIPTION")])
+    
+    write.table(exp.df, paste0(out.dir, "/", s2b$root.name, "_exp.txt"),
+                sep = "\t", quote = F, row.names = F, col.names = T)
+    pheno <- s2b$coldata[colnames(exp.df)[-c(1,2)], pheno.col]
+    cls <- paste0(out.dir, "/", s2b$root.name, "_pheno.cls")
+    line1 <- c(length(pheno), length(unique(pheno)), 1)
+    write(line1, sep = " ", cls)
+    line2 <- c("#", names(table(pheno))) %>% paste0(collapse = " ")
+    write(line2, cls, sep = " ", append = T)
+    write(pheno %>% paste0(collapse = " "), cls, sep = " ", append = T)
+    return()
+  })
+  return()
+}
+
+
+de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "log_p",
+                     pbl.topn = NULL, pbl.samples, pbl.clusters = NULL,
                      comp, pos.filter=NULL, neg.filter=NULL, out.dir, root.name = NULL) {
+  # rank.by: log_p or log2FoldChange
   # pbl: pseudobulk list
   # pbl.samples is really just used to figure out what are the columns corresponding to samples when
   #taking topn
@@ -263,7 +301,7 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.topn = NULL, pbl.samples, p
     comparison <- comp
     df <- de.grid$grid.sum %>% filter(comp == comparison) %>% 
       mutate(log_p = -1 * utilsFanc::log2pm(p, base = 10) * (logFC/abs(logFC)) , gene = toupper(gene)) %>% 
-      filter(log_p != 0) %>% select(gene, log_p, master.ident)
+      filter(log_p != 0) %>% dplyr::select(gene, log_p, master.ident)
   } else {
     if (is.character(pbl))
       pbl <- readRDS(pbl)
@@ -274,24 +312,33 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.topn = NULL, pbl.samples, p
     }
     df <- lapply(names(pbl), function(name) {
       s2b <- pbl[[name]]
+      df <- s2b[[pbl.slot]] %>% as.data.frame()
+      if (is.null(df$gene))
+        df <- df %>% dplyr::mutate(., gene =rownames(.))
+      
       if (!is.null(pbl.topn)) {
         top.genes <- lapply(pbl.samples, function(sample) {
           genes <- s2b$res.exp$gene[rank(-1 * s2b$res.exp[, sample], ties.method = "random") <= pbl.topn]
           return(genes)
         }) %>% Reduce(union, .)
-        s2b$res.exp <- s2b$res.exp %>% filter(gene %in% top.genes)
+        df <- df %>% filter(gene %in% top.genes)
       }
-      df <- s2b$res.exp %>% select(gene, pvalue, log2FoldChange) %>% 
-        mutate(log_p = -log10(pvalue) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
-        filter(log_p != 0) %>% select(gene, log_p, master.ident)
+      df <-  df %>% dplyr::select(gene, pvalue, log2FoldChange) %>% 
+        dplyr::mutate(log_p = -log10(pvalue) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
+        dplyr::filter(log_p != 0) %>% dplyr::select(gene, log_p, log2FoldChange, master.ident)
       return(df)
     }) %>% Reduce(rbind, .)
   }
-  
   rnk.list <- df %>% split(f = df$master.ident) %>% 
     lapply(function(x) {
       cluster <- x$master.ident[1]
-      x <- x %>% select(gene, log_p) %>% arrange(desc(log_p))
+      if (rank.by == "log_p")
+        x <- x %>% dplyr::select(gene, log_p) %>% arrange(desc(log_p))
+      else if (rank.by == "log2FoldChange")
+        x <- x %>% dplyr::select(gene, log2FoldChange) %>% arrange(desc(log2FoldChange))
+      else
+        stop("rank.by has to be log_p or log2FoldChange")
+      
       if (!is.null(pos.filter))
         x <- x %>% filter(grepl(pos.filter, gene))
       if (!is.null(neg.filter))
@@ -352,6 +399,42 @@ gmt.get.gs <- function(gmt = GMT.FILES["msigdb.v7.2"], gs.names) {
   gs.list <- gs.df$gene %>% strsplit(";")
   names(gs.list) <- gs.df$ont
   return(gs.list)
+}
+
+gmt.gen <- function(gene.list = NULL, # start from raw gene list 
+                     genes.df = NULL, gmt.vec.in = GMT.FILES["msigdb.v7.2"], geneset.names = NULL,
+                    # subset a gmt file. regex enabled, genes.df: gmt already read in.
+                     out.dir, gmt.name) {
+  # gene.list format: list(type1 = c("miao", "wang"), type2 = c("aa", "huhu"))
+  if (is.null(gene.list)) {
+    if (is.null(genes.df)) {
+      genes.df <- lapply(gmt.vec.in, function(gmt.in) {
+        df <- clusterProfiler::read.gmt(gmtfile = gmt.in) %>% 
+          factor2character.fanc()
+        return(df)
+      }) %>% Reduce(rbind, .)
+    }
+    if (!is.null(geneset.names)) {
+      geneset.names <- tolower(geneset.names)
+      genes.df <- genes.df %>% mutate(key = tolower(ont)) %>% 
+        filter(grepl(paste0(geneset.names, collapse = "|"), key))
+    }
+    gene.list <- genes.df$gene %>% split(f = genes.df$ont)
+  }
+  if (is.null(names(gene.list)))
+    stop("gene.list must be named")
+  outs <- lapply(names(gene.list), function(name) {
+    genes <- gene.list[[name]] %>% toupper()
+    out <- c(name, "http://miao.html", genes)
+    out <- paste0(out, collapse = "\t")
+    return(out)
+  }) %>% unlist()
+  out.gmt <- paste0(out.dir, "/", gmt.name, ".gmt")
+  system(paste0("mkdir -p ", dirname(out.gmt)))
+  write(outs, out.gmt, sep = "\n")
+  names(out.gmt) <- gmt.name
+  res <- list(gmt = out.gmt, stats = list(genesets = names(gene.list)))
+  return(res)
 }
 
 # gpo: gsea parse object
@@ -497,6 +580,29 @@ gsea.plot.batch <- function(gs.vec.list, so, gpo,
   })
 }
 
+### 2022-12-24 GSEA code:
+gsea.get.result <- function(tsv, top.n = NULL, translate = T) {
+  tsv <- Sys.glob(tsv)
+  if (length(tsv) != 1) {
+    stop("length(tsv) != 1")
+  }
+  df <- read.table(tsv, header = T, sep = "\t")
+  bDown <- ifelse(df$CORE.ENRICHMENT[1] == "Yes", F, T)
+  genes <- df %>% dplyr::filter(CORE.ENRICHMENT == "Yes") %>% 
+    dplyr::pull(SYMBOL)
+  if (!is.null(top.n)) {
+    if (bDown) {
+      genes <- rev(genes)
+    }
+    genes <- genes[1:min(length(genes), top.n)]
+  }
+  if (translate) {
+    genes <- stringr::str_to_title(genes)
+  }
+  return(genes)
+}
+### END: 2022-12-24 GSEA code;
+
 chromVAR.pipe <- function(dev = NULL, ao = NULL, ao.annotation.name, peakmat, cells = NULL, peaks = NULL,
                           motifs.use = NULL,
                           compute.dev = T, compute.syn = F, compute.cor = F,
@@ -585,4 +691,446 @@ chromVAR.pipe <- function(dev = NULL, ao = NULL, ao.annotation.name, peakmat, ce
   
   
   return(dev)
+}
+
+de.enrich.da <- function(de, da, gtf.gr, da.fc.filter = 1, plot.out = NULL) {
+  stats <- lapply(de, function(s2b) {
+    a2b <- da[[s2b$root.name]]
+    s2b$summary$non_de.genes <- s2b$res.exp$gene %>% .[!.%in% s2b$summary$de.genes]
+    s2b$summary$n.non_de <- length(s2b$summary$non_de.genes)
+    stats <- lapply(c("up", "down", "non_de"), function(type) {
+      # if (type == "down" && a2b$root.name == "seurat_clusters_3")
+      #   browser()
+      genes <- s2b$summary[[paste0(type, ".genes")]]
+      tss.gr <- gtf.gr %>% plyranges::filter(gene_name %in% genes, type == "transcript", 
+                                             gene_type == "protein_coding") %>% 
+        resize(width = 1, fix = "start", ignore.strand = F) %>% as.data.frame() %>% 
+        dplyr::rename(chr = seqnames, gene = gene_name) %>% 
+        dplyr::select(chr, start, end, gene) %>% unique() %>% makeGRangesFromDataFrame(keep.extra.columns = T)
+      mcols(tss.gr) <- dplyr::left_join(as.data.frame(mcols(tss.gr)),
+                                        s2b$res.exp[, c("gene", "log2FoldChange", "pvalue", "padj")])
+      da.gr <- a2b$res.exp %>% dplyr::rename(locus = gene) %>% 
+        .[, c("locus", "log2FoldChange", "pvalue", "padj")] %>% 
+        utilsFanc::loci.2.df(loci.col.name = "locus", remove.loci.col = F, return.gr = T)
+      tss.da <- plyranges::join_overlap_left(tss.gr, da.gr)
+      tss.da <- tss.da[!is.na(tss.da$locus)]
+      tss.da.df <- as.data.frame(tss.da)
+      tss.da.df <- tss.da.df %>% 
+        dplyr::mutate(bSameTrend = (log2FoldChange.x * log2FoldChange.y > 0))
+      if (!is.null(da.fc.filter)) {
+        tss.da.df$bSameTrend[abs(tss.da.df$log2FoldChange.y) < da.fc.filter] <- F
+      }
+      tss.da.sum <- tss.da.df %>% 
+        dplyr::group_by(gene) %>% dplyr::summarise(bSameTrend = sum(bSameTrend) > 0) %>% 
+        dplyr::ungroup() %>% as.data.frame()
+      stats <- data.frame(root.name = s2b$root.name, type = type, n = s2b$summary[[paste0("n.", type)]], 
+                          n.with.peak = nrow(tss.da.sum), n.same.trend = sum(tss.da.sum$bSameTrend))
+      stats$pct.same.trend <- stats$n.same.trend/stats$n#.with.peak
+      return(stats)
+    }) %>% Reduce(rbind, .)
+  }) %>% Reduce(rbind, .)
+  p <- ggplot(stats, aes(x = root.name, y = pct.same.trend, fill = type)) + 
+    geom_bar(stat = "identity", position = "dodge") + 
+    scale_y_continuous(labels = scales::percent) +
+    theme_classic() + theme(text = element_text(size = 20), aspect.ratio = 1)
+  trash <- wrap.plots.fanc(list(p), plot.out = plot.out, sub.width = 7, sub.height = 5)
+  return(p)
+}
+
+de.enrich.da.check <- function(de, da, slot = "summary", tss.file, out.dir,
+                               bedtools = "/bar/cfan/anaconda2/envs/jupyter/bin/bedtools") {
+  stats <- lapply(names(de), function(name) {
+    s2b <- de[[name]]
+    a2b <- da[[name]]
+    lapply(c("up", "down"), function(type) {
+      dar <- a2b[[slot]][[paste0(type, ".genes")]] %>% 
+        utilsFanc::loci.2.df(loci.vec = ., remove.loci.col = T)
+      dar.file <- paste0(out.dir, "/", name, "_dar_", type, ".bed")
+      tss.in.dar <- paste0(out.dir, "/", name, "_dar_", type, "_tss.bed")
+      utilsFanc::write.zip.fanc(df = dar, out.file = dar.file, bed.shift = T)
+      cmd <- paste0(bedtools, " intersect -a ", tss.file, " -b ", dar.file, " -wa > ", tss.in.dar)
+      system(cmd)
+      genes.dar <- read.table(tss.in.dar)$V4 %>% unique()
+      deg <- s2b[[slot]][[paste0(type, ".genes")]]
+      intsct <- intersect(genes.dar, deg)
+      res <- data.frame(cluster = name, direction = type,
+                        n.intsct = length(intsct), n.deg = length(deg),
+                        frac.deg = length(intsct)/length(deg),
+                        intsct = paste0(intsct, collapse = ","),
+                        non.intsct = paste0(deg[!deg %in% genes.dar], collapse = ","),
+                        deg = paste0(deg, collapse = ","),
+                        genes.dar = paste0(genes.dar, collapse = ","))
+      return(res)
+    }) %>% do.call(rbind, .) %>% return()
+  }) %>% do.call(rbind, .)
+  write.table(stats, paste0(out.dir, "/stats.tsv"), quote = F,
+              sep = "\t", row.names = F, col.names = T)
+  return(stats)
+}
+
+msigdb.m <- function(pbl, clusters = NULL, summary.slot = "summary",
+                     universe = "expressed",
+                     use.n.genes = NULL, seed = NULL,
+                     cats = "C5..GO:BP", 
+                     species = "Mus musculus",
+                     threads = 1) {
+  # universe: expressed. anything else: consider as missing.
+  for (cat in cats) {
+    sub.cats <- strsplit(cat, split = "@") %>% unlist()
+    go_df <- lapply(sub.cats, function(sub.cat) {
+      category <- sub("\\.\\..*$", "", sub.cat)
+      subcategory <- sub("^.+\\.\\.", "", sub.cat)
+      if (subcategory == "") {
+        subcategory <- NULL
+      }
+      go_df <- msigdbr::msigdbr(species = species, category = category, 
+                                subcategory = subcategory) %>% 
+        dplyr::select(gs_name, human_gene_symbol) %>% 
+        dplyr::rename(gene.set = gs_name, gene.name = human_gene_symbol)
+      return(go_df)
+    }) %>% Reduce(rbind, .)
+  
+    if (species == "Mus musculus") {
+      go_df <- go_df %>% dplyr::mutate(gene.name = stringr::str_to_title(gene.name))
+    } else if (species != "Homo sapiens") {
+      warning("Didn't convert the case of gene names while species is not human or mouse")
+    }
+    if (is.null(clusters)) {
+      clusters <- names(pbl)
+    }
+    pbl <- utilsFanc::safelapply(pbl, function(s2b) {
+      if (!s2b$root.name %in% clusters) {
+        return(s2b)
+      }
+      if (is.null(s2b$msigdb)) {
+        s2b$msigdb <- list()
+      }
+      
+      enrich <- lapply(c("up", "down"), function(type) {
+        genes <- s2b[[summary.slot]][[paste0(type, ".genes")]]
+        if (!is.null(use.n.genes) && length(genes) > use.n.genes) {
+          set.seed(seed = seed)
+          genes <- sample(genes, size = use.n.genes, replace = F)
+        }
+        if (universe[1] == "expressed") {
+          print("using all genes in s2b$bulkNorm$gene")
+          res <- clusterProfiler::enricher(genes, TERM2GENE = go_df, universe = s2b$bulkNorm$gene)
+        } else if (universe[1] == "all_mouse") {
+          print("using all mouse protein coding genes")
+          res <- clusterProfiler::enricher(genes, TERM2GENE = go_df,
+                                           universe = readLines("~/genomes/mm10/gencode/gencode.vM24.protein.coding.txt"))
+        } else if(universe[1] == "default") {
+          print("using default universe")
+          res <- clusterProfiler::enricher(genes, TERM2GENE = go_df)
+        } else {
+          res <- clusterProfiler::enricher(genes, TERM2GENE = go_df, universe = universe)
+        }
+      })
+      names(enrich) <- c("up", "down")
+      cat.name <- cat
+      # if (!is.null(use.n.genes)) {
+      #   cat.name <- paste0(cat, "_rand", use.n.genes, "_se", seed)
+      # }
+      # if (universe != "expressed") {
+      #   cat.name <- paste0(cat.name, "_gs")
+      # }
+      s2b$msigdb[[cat.name]] <- enrich
+      return(s2b)
+    }, threads = threads)
+  }
+  #  cat <- paste(category, subcategory, sep = "..")
+  return(pbl)
+}
+
+msigdb.sum <- function(pbl, cats = NULL, gene.sets = NULL, slot = "msigdb", out.file = NULL) {
+  df <- lapply(pbl, function(s2b) {
+    if (is.null(s2b[[slot]])) {
+      return()
+    }
+    cats.use <- names(s2b[[slot]])
+    if (!is.null(cats)) {
+      cats.use <- cats.use %>% .[grepl(paste0(cats, collapse = "|"),.)]
+    }
+    if (length(cats.use) < 1) {
+      return()
+    }
+    s2b[[slot]] <- s2b[[slot]][cats.use]
+    lapply(names(s2b[[slot]]), function(enrich.name) {
+      lapply(c("up", "down"), function(type) {
+        # print(s2b$root.name)
+        # print(enrich.name)
+        # print(type)
+        enrich.o <- s2b[[slot]][[enrich.name]][[type]]
+        if (is.null(enrich.o)) {
+          return()
+        }
+        # if (s2b$root.name == "seurat_clusters_1" && enrich.name == "C2..CP:BIOCARTA" &&
+        #     type == "up")
+        #     browser()
+        if (!is.null(gene.sets)) {
+          df <- enrich.o@result[gene.sets,] %>% na.omit()
+        } else {
+          df <- head(enrich.o, n = nrow(enrich.o))
+        }
+        rownames(df) <- NULL
+        df <- utilsFanc::add.column.fanc(
+          df1 = df,
+          df2 = data.frame(cluster = s2b$root.name, cat = enrich.name, type = type),
+          pos = 1)
+        return(df)
+      }) %>% Reduce(rbind, .) %>% return()
+
+    }) %>% Reduce(rbind, .) %>% return()
+    
+  }) %>% Reduce(rbind, .) %>% return()
+  if (!is.null(out.file)) {
+    df$GeneRatio <- paste0("# ", df$GeneRatio)
+    df$BgRatio <- paste0("# ", df$BgRatio)
+    utilsFanc::write.zip.fanc(df = df, out.file = out.file, zip = F, col.names = T, row.names = F)
+  }
+  return(df)
+}
+
+# msigdb.test.geneset <- function(pbl, gene.set, slot = "msigdb", cats = NULL, out.file = NULL) {
+#   df <- lapply(pbl, function(s2b) {
+#     lapply(c("up", "down"), function(type) {
+#       if (is.null(s2b[[slot]])) {
+#         return()
+#       }
+#       cats.use <- names(s2b[[slot]])
+#       if (!is.null(cats)) {
+#         cats.use <- cats.use %>% .[grepl(paste0(cats, collapse = "|"),.)]
+#       }
+#       if (length(cats.use) < 1) {
+#         return()
+#       }
+#       
+#       lapply(cat.use, function(enrich.name)) {
+#         enrich.o <- s2b[[slot]][[enrich.name]][[type]]
+#       }
+#     })
+#   })
+# }
+
+msigdb.dotplot <- function(pbl, cat.to.plot,
+                           n = 15, font.size = 7, wrap.width = 40,
+                           plot.out = NULL, sub.width = 6, sub.height = 4,
+                           threads = 1) {
+  pl <- utilsFanc::safelapply(pbl, function(s2b) {
+    pl <- lapply(c("up", "down"), function(type) {
+      enrich <- s2b$msigdb[[cat.to.plot]][[type]]
+      if (is.null(enrich)) {
+        stop("is.null(enrich)")
+      }
+      df <- head(enrich)
+      if (!is.null(wrap.width)) {
+        enrich@result$ID <- enrich@result$ID %>% 
+          gsub("_"," ", . ) %>% stringr::str_wrap(width = wrap.width) 
+        enrich@result$Description <- enrich@result$ID
+        rownames(enrich@result) <- enrich@result$ID
+      }
+      # if (s2b$root.name == "seurat_clusters_3" && type == "down") {
+      #   browser()
+      # }
+      p <- clusterProfiler::dotplot(enrich, showCategory = n, 
+                   font.size = font.size,
+                   title = paste0(s2b$root.name, " ", type))
+      return(p)
+    })
+    return(pl)
+  }) %>% Reduce(c, .)
+  p <- wrap.plots.fanc(pl, plot.out = plot.out,
+                       sub.width = sub.width, sub.height = sub.height)
+  invisible(p)
+}
+
+homer.plot.heatmap <- function(da.homer.dir = NULL, homer.txt.df,
+                               motif.names, column = "P-value", ...) {
+  # homer.txt.vec must be a df or a tsv file
+  #with 2 columns: name and path. You can also start from
+  #feeding the results from deseq2.homer() to da.homer.dir and homer.txt.vec will
+  #be automatically generated.
+  if (!is.null(da.homer.dir)) {
+    homer.txt.df <- deseq2.homer.gather(da.homer.dir = da.homer.dir, ...)
+  }
+  if (is.character(homer.txt.df)) {
+    homer.txt.df <- read.table(homer.txt.df, header = T)
+  }
+  if (file.exists(motif.names[1])) {
+    motif.names <- readLines(motif.names)
+  }
+  browser()
+  # gave up because I realized that the normalization of each row might be an issue
+}
+
+homer.plot.bar <- function(da.homer.dir = NULL, homer.txt.df, 
+                           motif.map, use.regex = F, col.num = 3,
+                           flip.up.down = F, plot.out, plot.logo = F,
+                           width = 3, height = 3, font.size = 12,
+                           logo.width = 200, logo.height = 300,
+                           ...) {
+  if (!is.null(da.homer.dir)) {
+    homer.txt.df <- deseq2.homer.gather(da.homer.dir = da.homer.dir, ...)
+  }
+  if (is.character(homer.txt.df)) {
+    homer.txt.df <- read.table(homer.txt.df, header = T)
+  }
+  if (file.exists(motif.map[1])) {
+    motif.map <- read.table(motif.map, header = T, sep = "\t", quote = "")
+  }
+  j <- left_join(motif.map, homer.txt.df)
+  j$root <- j$name %>% sub("_up|_down", "", .)
+  j$type <- j$name %>% stringr::str_extract("up|down")
+  pl <- split(j, f = j$root) %>% 
+    lapply(function(df) {
+      df$pvalue <- homer.core.extract(path = df$path, motifs = df$motif, 
+                                      use.regex = use.regex, col.num = col.num)
+      if (plot.logo) {
+        logos <- homer.core.extract(paths = df$path, motifs = df$motif,
+                                      use.regex = use.regex, get.logo.path = T)
+        logos <- logos[order(df$pvalue)]
+        if (any(!file.exists(logos))) {
+          stop(paste0("these files do not exist: ", 
+                      paste0(logos[!file.exists(logos)]), collapse = "\n"))
+        }
+        logos <- lapply(logos, rsvg::rsvg)
+        widths <- sapply(logos, dim)[2, ]
+        widths <- round(widths/max(widths), 2)
+        dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+        png(utilsFanc::insert.name.before.ext(plot.out, paste0("logo_", df$root[1]), delim = "_"), 
+            width = logo.width, height = logo.height, res = 100)
+        try({
+          par(mar=rep(0,4))
+          layout(matrix(1:length(logos), ncol=1, byrow=TRUE))
+          for(i in 1:length(logos)) {
+            print(plot(NA,xlim=0:1,ylim=0:1,xaxt="n",yaxt="n",bty="n"))
+            print(rasterImage(logos[[i]],0,0, widths[i],1))
+          }
+        })
+        dev.off()
+      }
+      
+      df$motif.ez <- df$motif %>% sub("/.+$", "", .) %>% 
+        factor(., levels = .[rev(order(df$pvalue))])
+      if (flip.up.down) {
+        df$type[df$type == "up"] <- "miao"
+        df$type[df$type == "down"] <- "up"
+        df$type[df$type == "miao"] <- "down"
+      }
+      p <- ggplot(df, aes(x = motif.ez, y = -log10(pvalue), fill = type)) + 
+        geom_bar(stat = "identity") + 
+        coord_flip() +
+        theme_classic() +
+        ggtitle(df$root[1]) +
+        theme(text = element_text(size = font.size))
+        
+      return(p)
+    })
+  p <- wrap.plots.fanc(plot.list = pl, plot.out = plot.out,
+                  sub.height = height, sub.width = width)
+  invisible(p)
+}
+
+homer.core.extract <- function(paths, motifs, use.regex = F, col.num = 3,
+                               get.logo.path = F) {
+  # path <- j$path[1]
+  if (length(paths) == 1) {
+    paths <- rep(paths, length(motifs))
+  }
+  if (length(paths) != length(motifs)) {
+    stop("length(paths) != length(motifs)")
+  }
+  value <- sapply(seq_along(motifs), function(i) {
+    motif <- motifs[i]
+    path <- paths[i]
+    df <- read.table(file = path, header = F, sep = "\t", quote = "", skip = 1)
+    if (get.logo.path) {
+      if (use.regex) {
+        id <- which(grepl(motif, df$V1))
+      } else {
+        id <- which(df$V1 == motif)
+      }
+      value <- paste0(dirname(path), "/knownResults/known", id, ".logo.svg")
+    } else {
+      if (use.regex) {
+        value <- df %>% .[grepl(motif, .$V1), col.num]
+      } else {
+        value <- df %>% .[.$V1 == motif, col.num]
+      }
+    }
+    
+    if (length(value) != 1 )
+      stop(paste0("error in homer.core.extract at motif ", motif, ": length(value) != 1"))
+    return(value)
+  }) %>% `names<-`(NULL)
+  return(value)
+}
+
+deseq2.homer.gather <- function(da.homer.dir, 
+                                regex.include = NULL, regex.exclude = NULL,
+                                regex.from = NULL, regex.to = "",
+                                out.file = NULL) {
+  results <- Sys.glob(paste0(da.homer.dir, "/*/*/homer/knownResults.txt"))
+  if (!is.null(regex.include)) {
+    results <- results %>% .[grepl(paste0(regex.include, collapse = "|"), .)]
+  }
+  if (!is.null(regex.exclude)) {
+    results <- results %>% .[!grepl(paste0(regex.exclude, collapse = "|"), .)]
+  }
+  if (length(results) < 1) {
+    stop("length(results) < 1")
+  }
+  name <- results %>% sub(paste0(da.homer.dir, "/"), "", .)
+  name <- sub("/.+$", "", name) %>% paste0("_", stringr::str_extract(name, "up|down"))
+  if (!is.null(regex.from)) {
+    name <- name %>% gsub(regex.from, regex.to, .)
+  }
+  df <- data.frame(name = name, path = results)
+  if (!is.null(out.file)) {
+    dir.create(dirname(out.file), showWarnings = F, recursive = T)
+    write.table(df, out.file, quote = F, sep = "\t", row.names = F, col.names = T)
+  }
+  return(df)
+}
+
+t.f.titrate.gene.enrich <- function(de.list, lfc, summ, msigdb.cats, universes, root.name = NULL, out.dir) {
+  if (is.null(root.name)) {
+    root.name <- basename(out.dir)
+  }
+  lapply(names(de.list), function(de.name) {
+    de <- de.list[[de.name]]
+    lapply(universes, function(universe) {
+      lapply(lfc, function(i) {
+        lapply(summ, function(summ) {
+          if (summ == "summary") {
+            res.slot <- "res"
+          } else if (summ == "sum_shrink") {
+            res.slot <- "shrink_ashr"
+          } else {
+            stop()
+          }
+          de <- deseq2.summary(pbl = de, res.slot = res.slot, 
+                               summary.slot = paste0(summ, "_lfc", i),
+                               log2fc.cutoff = i,
+                               rank.by = "log2FoldChange",
+                               gene.out.dir = paste0(out.dir, "/", root.name, "_deGenes/", de.name, "_", summ, "_lfc/lfc", i, "/")
+          )
+          
+          de <- msigdb.m(de, summary.slot = paste0(summ, "_lfc", i),
+                         cats = msigdb.cats, threads = 4, universe = universe)
+          out.root <- paste0(out.dir, "/", root.name, "_", de.name, "_", universe, "_", summ, "_lfc", i)
+          
+          trash <- msigdb.sum(pbl = de, 
+                              out.file = paste0(out.root, ".tsv"),
+                              cats = msigdb.cats )
+          
+          msigdb.dotplot(de, cat.to.plot = msigdb.cats, n = 10, 
+                         font.size = 10, 
+                         plot.out = paste0(out.root, ".png"))
+          return()
+        })
+      })
+      
+    })
+  })
 }

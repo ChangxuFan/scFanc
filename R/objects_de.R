@@ -199,7 +199,7 @@ de.pos.filter.marker <- function(so, ident, s2b.obj) {
   
 }
 
-FindMarkers.fanc <- function (object, ident.1 = NULL, ident.2 = NULL, group.by = NULL, active.ident = "seurat_clusters",
+FindMarkers.fanc <- function (object, set.ident = NULL, ident.1 = NULL, ident.2 = NULL, group.by = NULL, active.ident = "seurat_clusters",
                               subset.ident = NULL, assay = NULL, slot = "data", reduction = NULL, 
                               features = NULL, logfc.threshold = 0.25, test.use = "wilcox", 
                               min.pct = 0.1, min.diff.pct = -Inf, verbose = TRUE, only.pos = FALSE, 
@@ -207,6 +207,9 @@ FindMarkers.fanc <- function (object, ident.1 = NULL, ident.2 = NULL, group.by =
                               min.cells.feature = 3, min.cells.group = 3, pseudocount.use = 1,
                               add.cdr = F, equal.cells = F,
                               ...) {
+  if (!is.null(set.ident)) {
+    Idents(object) <- set.ident
+  }
   if (test.use == "MAST" || add.cdr == T) {
     raw.mat <- object@assays$RNA@counts
     object[["cdr"]] <-  (colSums(raw.mat > 0)/nrow(raw.mat)) %>% scale()
@@ -408,13 +411,15 @@ grid.diagnostics <- function(grids, so, norms, tests,  master.ident = "seurat_cl
 }
 
 grid.diagnostics.2 <- function(grids, so, norms, tests,  master.ident = "seurat_clusters", comp,
-                               marker.list = NULL , n.col = NULL,  
+                               gene.list = NULL , n.col = NULL, n.split = 1,
+                               slide.column = NULL, slide.window = 10, add.direction = T,
                                genes.label = NULL,
                                sub.idents=NULL, max.quantile = NULL,
                                s2b.list = NULL, p.adj.cutoff, master.dir, root.name = NULL,
-                               threads = 1,
+                               threads = 1, 
                                use.plotly = F) {
   # different from grid.diagnostics: it tries to put all clusters into 1 file
+  # the format of gene.list: list(up = c("gene1", "Gene2"), down = c("miao", "wang"))
   label.var <- NULL
   if (!is.null(genes.label))
     label.var <- "gene"
@@ -452,17 +457,39 @@ grid.diagnostics.2 <- function(grids, so, norms, tests,  master.ident = "seurat_
         df <- mat[, grepl(paste0(sub.ident, "\\.\\."), colnames(mat))] %>% as.data.frame()
         colnames(df) <- sub(paste0(sub.ident, "\\.\\."), "", colnames(df))
         df$gene <- rownames(df)
-        # if (sub.idents == "1")
-        #   browser()
-        de.genes <- grids[[norm]][[test]]$grid.de %>% filter(master.ident == sub.ident) %>% 
-          .[.[, paste0("p.adj_", comp)] < p.adj.cutoff, "gene"] %>% .[!is.na(.)]
-        gene.list <- list(# all.genes = NULL, 
-          # marker.genes = marker.genes, 
-          # Rpl.genes = Rpl.genes,
-          de.genes = de.genes
-          # de.markers = de.markers, 
-          # de.Rpl = de.Rpl
-        )
+        if (is.null(gene.list)) {
+          if (!is.null(slide.column)) {
+            grid <- grids[[norm]][[test]]$grid.sum %>% 
+              .[.$comp == comp & .$master.ident == sub.ident,] 
+            if (! slide.column %in% colnames(grid)) {
+              stop(paste0("slide.column: ", slide.column, " not found in grid"))
+            }
+            if (add.direction == T) {
+              # grid[, slide.column] <- grid[, slide.column] * (grid$logFC/abs(grid$logFC))
+              grid$direction <- grid$logFC/abs(grid$logFC) 
+            } else {
+              grid$direction <- 1
+            }
+            grid <- grid %>% group_by(direction)
+            grid <- grid %>% mutate(rank = rank(!!as.name(slide.column))) %>% 
+              mutate(pct = 100*rank/max(rank)) %>% 
+              mutate(group = ceiling(pct/slide.window) * direction) %>% 
+              ungroup() %>% as.data.frame()
+            gene.list <- grid$gene %>% split(., f = grid$group)
+            names(gene.list)[as.numeric(names(gene.list)) < 0] <- as.numeric(names(gene.list)[as.numeric(names(gene.list)) < 0] ) - 100
+            gene.list <- gene.list[order(abs(as.numeric(names(gene.list))))]
+            names(gene.list) <- paste0("g", names(gene.list))
+          } else {
+            de.genes <- grids[[norm]][[test]]$grid.de %>% filter(master.ident == sub.ident) %>% 
+              .[.[, paste0("p.adj_", comp)] < p.adj.cutoff, "gene"] %>% .[!is.na(.)]
+            gene.list <- list(# all.genes = NULL, 
+              
+              de.genes = de.genes
+              
+            )
+          }
+        } 
+
         p.list <- lapply(seq_along(gene.list), function(i) {
           p <- xy.plot(df = df, x = sample.2, y = sample.1, 
                        highlight.var = "gene",
@@ -487,7 +514,8 @@ grid.diagnostics.2 <- function(grids, so, norms, tests,  master.ident = "seurat_
       } else {
         plot.out <- paste0(master.dir, "/",root, ".png")
       }
-      trash <- wrap.plots.fanc(p.list, tooltip = "gene", plot.out = plot.out, n.col = n.col)
+      trash <- wrap.plots.fanc(p.list, tooltip = "gene", plot.out = plot.out, n.col = n.col,
+                               n.split = n.split)
       return()
     })
   })
@@ -574,14 +602,26 @@ assay.mat.gen <- function(so, out.Rds, cluster.ident, clusters = NULL, group.by,
   return(s2b.list)
 }
 
-deseq2.xyplot <- function(pbl, pbl.soup = NULL, de.grid = NULL, de.grid.master.ident,
-                          no.highlight = F, density.filter = NULL, device = "png", plotly.label.all = F,
-                          add.label = F,
-                          plot.dir, comp.vec, root.name = NULL, transformation = NULL, 
-                          quantile.limit = NULL, padj.cutoff = 0.05, use.p = F, threads = 8, 
+deseq2.xyplot <- function(pbl, pbl.slot = "res.exp", summ.slot = "summary", # behaviour change: now prefer to use the summary slot.
+                          # padj.cutoff = 0.05, use.p = F, 
+                          pbl.soup = NULL, de.grid = NULL, de.grid.master.ident, # mostly not used anymore
+                          comp.vec, comp.meta = NULL, 
+                          transformation = NULL, quantile.limit = NULL,
+                          no.highlight = F, highlight.by.overlap.gr = NULL, highlight.genes = NULL,
+                          density.filter = NULL, 
+                          add.label = F, label.list = NULL,
+                          plotly.label.all = F, plotly.highlight.only = T,
+                          device = c("png"), plot.dir, root.name = NULL, # device could also be html
+                          n.col = NULL, threads = 8, save.rds = F, plot.each.comp = F,
                           ...) {
   # pbl: pseudobulk list object generated by bulk.list()
   # de.grid: extend support to objects generated by de.grid()
+  # p.flag <- "padj"
+  # if (use.p == T)
+  #   p.flag <- "p"
+  if (is.null(root.name)) {
+    root.name <- summ.slot
+  }
   if (add.label == T) {
     warning("currently only support adding labels to all points. use with caution")
     label.var <- "gene"
@@ -598,121 +638,324 @@ deseq2.xyplot <- function(pbl, pbl.soup = NULL, de.grid = NULL, de.grid.master.i
   if (is.null(s2b.names)) {
     stop("names(pbl) is null")
   }
+
   n.split <- length(pbl.soup) + 1
   
-  lapply(comp.vec, function(comp) {
-    sample.y <- comp %>% sub(":.+$", "",.)
-    sample.x <- comp %>% sub("^.+:", "",.)
-    pl <- utilsFanc::safelapply(s2b.names, function(s2b.name) {
-      # s2b <- pbl[[s2b.name]]
-      if (no.highlight == F) {
-        if (!is.null(de.grid)) {
-          pbl[[s2b.name]]$res.exp <- de.grid$grid.sum %>% 
-            filter(master.ident == sub(paste0(de.grid.master.ident, "_"), "", s2b.name)) %>% 
-            rename(log2FoldChange = logFC, padj = p.adj, pvalue = p) %>% 
-            mutate(log2FoldChange = log2(2.71828^log2FoldChange))
-        }
-        
-        if (use.p == F) {
-          de.df <- pbl[[s2b.name]]$res.exp %>% filter(padj < padj.cutoff) %>% select(gene, log2FoldChange)
-        } else {
-          de.df <- pbl[[s2b.name]]$res.exp %>% filter(pvalue < padj.cutoff) %>% select(gene, log2FoldChange)
-        }
-        
-        de.df$log2FoldChange[de.df$log2FoldChange > 0] <- "up"
-        de.df$log2FoldChange[de.df$log2FoldChange < 0] <- "down"
-        
-        highlight.var <- "gene"
+  pl <- lapply(comp.vec, function(comp) {
+    lapply(device, function(dev) {
+      if (dev == "html") {
+        highlight.only <- plotly.highlight.only
       } else {
-        highlight.var <- NULL
+        highlight.only <- F
       }
-
-      pbl.2 <- c(pbl[s2b.name], pbl.soup)
+      pl <- utilsFanc::safelapply(s2b.names, function(s2b.name) {
+        # s2b <- pbl[[s2b.name]]
+        if (no.highlight == F) {
+          if (!is.null(highlight.by.overlap.gr)) {
+            loci <- pbl[[s2b.name]][[pbl.slot]]$gene %>% utilsFanc::loci.2.gr()
+            loci <- loci %>% subsetByOverlaps(highlight.by.overlap.gr)
+            de.df <- data.frame(gene = utilsFanc::gr.get.loci(loci), 
+                                direction = "gr")
+            highlight.var <- "gene"
+          } else if (!is.null(highlight.genes)) {
+            de.df <- data.frame(gene = highlight.genes, direction = "geneset")
+            highlight.var <- "gene"
+          } else if (!is.null(summ.slot)) {
+            warning("defaulted to use summ.slot (behavior change since 2022-07-07.")
+            summ <- pbl[[s2b.name]][[summ.slot]]
+            if (is.null(summ)) {
+              stop(paste0("slot '", summ.slot, "' not found"))
+            }
+            de.df <- pbl[[s2b.name]][[pbl.slot]] %>% filter(gene %in% summ$de.genes)
+            if (nrow(de.df) == 0) {
+              highlight.var <- NULL
+              no.highlight <- T
+            } else {
+              de.df$direction <- NA
+              de.df$direction[de.df$gene %in% summ$up.genes] <- "up"
+              de.df$direction[de.df$gene %in% summ$down.genes] <- "down"
+              highlight.var <- "gene"
+              de.df <- de.df[, c("gene", "direction")]
+            }
+          } else {
+            stop("old code that hasn't been examined forever")
+            # if (!is.null(de.grid)) {
+            #   pbl[[s2b.name]][[pbl.slot]] <- de.grid$grid.sum %>% 
+            #     filter(master.ident == sub(paste0(de.grid.master.ident, "_"), "", s2b.name)) %>% 
+            #     rename(log2FoldChange = logFC, padj = p.adj, pvalue = p) %>% 
+            #     mutate(log2FoldChange = log2(2.71828^log2FoldChange))
+            # }
+            # if (!is.null(highlight.by.overlap.gr)) {
+            #   stop("this part of the function is not working. because sample.y and sample.x is updated to incoporate multiple samples")
+            #   gr <- highlight.by.overlap.gr
+            #   de.df <- pbl[[s2b.name]][[pbl.slot]] %>% utilsFanc::loci.2.df(loci.col.name = "gene", return.gr = T)
+            #   de.df <- subsetByOverlaps(de.df, gr, ignore.strand = T) %>% as.data.frame()
+            #   de.df$log2FoldChange <- log2pm(de.df[, sample.y]/de.df[, sample.x])
+            # } else {
+            #   if (use.p == F) {
+            #     de.df <- pbl[[s2b.name]][[pbl.slot]] %>% filter(padj < padj.cutoff) %>% dplyr::select(gene, log2FoldChange)
+            #   } else {
+            #     de.df <- pbl[[s2b.name]][[pbl.slot]] %>% filter(pvalue < padj.cutoff) %>% dplyr::select(gene, log2FoldChange)
+            #   }
+            # }
+            # 
+            # de.df$log2FoldChange[de.df$log2FoldChange > 0] <- "up"
+            # de.df$log2FoldChange[de.df$log2FoldChange < 0] <- "down"
+            # de.df <- de.df[, c("gene", "log2FoldChange")]
+            # highlight.var <- "gene"
+          }
+        } else {
+          highlight.var <- NULL
+        }
         
-      pl <- lapply(names(pbl.2), function(s2b.name.2) {
-        s2b <- pbl.2[[s2b.name.2]]
-        df <- s2b$bulkNorm 
-        colnames(df) <- sub("^bulkNorm_", "", colnames(df))
-        if (no.highlight == F)
-          df <- left_join(df, de.df)
-        p <- xy.plot(df = df, x = sample.x, y = sample.y, transformation = transformation,
-                     quantile.limit = quantile.limit, density.filter = density.filter,
-                     highlight.var = highlight.var, highlight.values = de.df$gene, 
-                     label.var = label.var, use.geom_text = T, 
-                     plotly.var = "gene", highlight.color.var = "log2FoldChange", 
-                     plotly.label.all = plotly.label.all,
-                     show.highlight.color.var = F) +
-          ggtitle(s2b.name.2)
+        pbl.2 <- c(pbl[s2b.name], pbl.soup)
+        pl <- lapply(names(pbl.2), function(s2b.name.2) {
+          s2b <- pbl.2[[s2b.name.2]]
+          df <- s2b$bulkNorm 
+          colnames(df) <- sub("^bulkNorm_", "", colnames(df))
+          if (no.highlight == F)
+            df <- left_join(df, de.df)
+          
+          comp.l <- list (y = comp %>% sub(":.+$", "",.),
+                          x =  comp %>% sub("^.+:", "",.))
+          
+          if (!is.null(comp.meta)) {
+            for (i in 1:length(comp.l)) {
+              samples.in.comp <- s2b$coldata %>% .[.[, comp.meta] %in% comp.l[[i]], , drop = F] %>% rownames()
+              df[, comp.l[[i]]] <- df[, samples.in.comp] %>% utilsFanc::pmean()
+            }
+          }
+          df <- cbind(data.frame(id = 1:nrow(df)), df)
+          if (dev == "html") {
+            ref.file <- paste0(c(root.name, "_", s2b.name.2, "_", paste0(comp, "_", summ.slot), ".tsv"), collapse = ".") %>% 
+              paste0(plot.dir, "/", .)
+            dir.create(plot.dir, showWarnings = F, recursive = T)
+            write.table(df[!is.na(df$direction),], ref.file, row.names = F, col.names = T, sep = "\t", quote = F)
+          }
+          if (!is.null(label.list[[s2b.name]])) {
+            label.values <- label.list[[s2b.name]]
+          } else {
+            label.values <- NULL
+          }
+          p <- xy.plot(df = df, x = comp.l$x, y = comp.l$y, transformation = transformation,
+                       quantile.limit = quantile.limit, density.filter = density.filter,
+                       highlight.var = highlight.var, highlight.values = de.df$gene, 
+                       label.var = label.var, label.values = label.values,
+                       use.geom_text = T,
+                       plotly.var = "gene", highlight.color.var = "direction", 
+                       highlight.only = highlight.only,
+                       plotly.label.all = plotly.label.all,
+                       show.highlight.color.var = F, ...) +
+            ggtitle(paste0(root.name, "  ", s2b.name.2))
+          
+          return(p)
+        })
+        return(pl)
+      }, threads = threads) %>% Reduce(c, .)
+      system(paste0("mkdir -p ", plot.dir))
 
-        return(p)
-      })
+      plot.out <- paste0(root.name, "_", comp, "_", summ.slot, ".", dev) %>% 
+        paste0(plot.dir, "/", .)
+      if (plot.each.comp)
+        wrap.plots.fanc(plot.list = pl, plot.out = plot.out, n.split = n.split, tooltip = "gene", n.col = n.col)
+      if (save.rds == T)
+        saveRDS(pl, paste0(tools::file_path_sans_ext(plot.out), ".Rds"))
       return(pl)
-    }, threads = threads) %>% Reduce(c, .)
-    system(paste0("mkdir -p ", plot.dir))
-    p.flag <- "padj"
-    if (use.p == T)
-      p.flag <- "p"
-    plot.out <- paste0(c(root.name, paste0(comp, "_", p.flag, "_", padj.cutoff), device), collapse = ".") %>% 
-      paste0(plot.dir, "/", .)
-    wrap.plots.fanc(plot.list = pl, plot.out = plot.out, n.split = n.split, tooltip = "gene")
-    saveRDS(pl, paste0(tools::file_path_sans_ext(plot.out), ".Rds"))
-    return()
-  })
-  return()
+    }) %>% Reduce(c, .) %>% return()
+
+  }) %>% Reduce(c, .) %>% return()
+  plot.out <- paste0(plot.dir, "/", root.name, ".", device)
+  wrap.plots.fanc(plot.list = pl, plot.out = plot.out, tooltip = "gene", n.col = n.col)
+  if (length(pl) == 1) {
+    pl <- pl[[1]]
+  }
+  invisible(pl)
 }
-deseq2.de.from.density <- function(pbl, comp.vec, transformation = NULL, 
+
+# pbl.annotate.peaks <- function(pbl, genome) {
+#   pbl <- lapply(pbl, function(a2b) {
+#     a2b$bulkNorm %>% head()
+#     gr <- a2b$bulkNorm %>% utilsFanc::loci.2.df(loci.col.name = "gene", return.gr = T)
+#     anno <- utilsFanc::annotate.fanc(gr = gr, genome = genome)
+#     anno
+#   })
+#   return(pbl)
+# }
+
+deseq2.de.from.density <- function(pbl, comp, 
+                                   slot.name = NULL,
+                                   transformation = NULL, two.sided = F,
                                    density.filter = 0.01, 
-                                   plot.dir = NULL, plot.root.name = NULL,
+                                   genome,
+                                   plot.dir, plot.root.name = NULL,
+                                   do.html = F,
                                    threads = 8) {
-  utilsFanc::safelapply(pbl, function(s2b) {
+  sample.y <- comp %>% sub(":.+$", "",.)
+  sample.x <- comp %>% sub("^.+:", "",.)
+  if (is.null(slot.name))
+    slot.name <- comp
+  res.list <- utilsFanc::safelapply(pbl, function(s2b) {
     if (is.null(s2b$de.dens))
       s2b$de.dens <- list()
-    for (comp in comp.vec) {
-      sample.y <- comp %>% sub(":.+$", "",.)
-      sample.x <- comp %>% sub("^.+:", "",.)
-      # dens.df <- s2b$bulkNorm
-      dens.df <- xy.plot(df = s2b$bulkNorm, x = sample.x, y = sample.y,
-                         transformation = transformation, density.filter = density.filter, 
-                         return.df = T)
-      if (!is.null(plot.dir)) {
-        if (!is.null(plot.root.name))
-          root.name <- paste0(plot.dir, "/", plot.root.name,"..",s2b$root.name)
-        else
-          root.name <- paste0(plot.dir, "/", s2b$root.name)
-        
-        plot.out <- paste0(root.name, "_comp_", density.filter, ".png")
-        trash <- xy.plot(df = s2b$bulkNorm, x = sample.x, y = sample.y,
-                         transformation = transformation, outfile = plot.out,
-                         highlight.var = "gene", highlight.values = dens.df$gene,
-                         return.df = F)
-        
-      } 
-      s2b$de.dens[[comp]] <- list()
-      s2b$de.dens[[comp]]$de <- dens.df$gene
-      s2b$de.dens[[comp]]$filter <- density.filter
+    
+    # dens.df <- s2b$bulkNorm
+    
+    bulkNorm.transform <- s2b$bulkNorm
+    bulkNorm.transform[, sample.x] <- bulkNorm.transform[, sample.x] %>% transformation()
+    bulkNorm.transform[, sample.y] <- bulkNorm.transform[, sample.y] %>% transformation()
+    
+    dens.df <- xy.plot(df = bulkNorm.transform, x = sample.x, y = sample.y,
+                       density.filter = density.filter, density.filter.2sided = two.sided,
+                       return.df = T)
+
+    p.png <- xy.plot(df = bulkNorm.transform, x = sample.x, y = sample.y,
+                     # transformation = transformation, 
+                     highlight.var = "gene", highlight.values = dens.df$gene,
+                     return.df = F, title = s2b$root.name, 
+                     density.filter.2sided = two.sided)
+    if (do.html == T) {
+      p.html <- xy.plot(df = bulkNorm.transform, x = sample.x, y = sample.y,
+                        # transformation = transformation, 
+                        highlight.var = "gene", highlight.values = dens.df$gene,
+                        highlight.only = T, plotly.var = "gene", density.filter.2sided = two.sided,
+                        return.df = F, title = s2b$root.name)
+      
+    } else {
+      p.html <- NULL
     }
     
-    return(s2b)
+    dens.list <- list()
+    dens.list$dens.df <- dens.df
+    dens.list$de <- s2b$bulkNorm %>% 
+      filter(gene %in% dens.df$gene) %>% 
+      mutate(dist = !!as.name(sample.y) - !!as.name(sample.x)) %>% 
+      mutate(sign = if_else(dist > 0, "+", "-")) %>% 
+      arrange(sign, !!as.name(sample.x))
+    
+    dens.list$de.transformed <- bulkNorm.transform %>% 
+      filter(gene %in% dens.df$gene) %>% 
+      mutate(dist = !!as.name(sample.y) - !!as.name(sample.x)) %>% 
+      mutate(sign = if_else(dist > 0, "+", "-")) %>% 
+      arrange(sign, !!as.name(sample.x))
+    
+    dens.list$filter <- density.filter
+    dens.list$transformed <- bulkNorm.transform
+    
+    s2b$de.dens[[slot.name]] <- dens.list
+    dir.create(paste0(plot.dir, "/xlsx/"), showWarnings = F, recursive = T)
+    
+    anno <- utilsFanc::annotate.fanc(gr = dens.list$de.transformed %>% 
+                                       utilsFanc::loci.2.df(loci.col.name = "gene", 
+                                                            return.gr = T, 
+                                                            remove.loci.col = T),
+                                     genome = genome)
+    anno <- anno %>% as.data.frame()
+    xlsx::write.xlsx(x = anno, 
+                     file = paste0(plot.dir, "/xlsx/", 
+                                   plot.root.name, "_", s2b$root.name, ".xlsx"),
+                     row.names = F, col.names = T)
+    
+    mat <- dens.list$de.transformed %>% `rownames<-`(., .$gene) %>% 
+      .[, c(sample.x, sample.y)] %>% as.matrix()
+    
+    hm <- ComplexHeatmap::Heatmap(mat,
+                                  cluster_rows = T, show_row_dend = F, show_row_names = F,
+                                  cluster_columns = F)
+    trash <- save.base.plot(p = hm, file = paste0(plot.dir, "/hm/", 
+                                         plot.root.name, "_", s2b$root.name, ".png"),
+                            # height = 15*nrow(dens.list$de.transformed)
+                            height = 800)
+    res <- list(s2b = s2b, p.png = p.png, p.html = p.html)
+    return(res)
   })
+  pbl <- res.list %>% lapply(function(x) return(x$s2b))
+  if (!is.null(plot.root.name))
+    root.name <- paste0(plot.dir, "/xy/", plot.root.name, "..")
+  else
+    root.name <- paste0(plot.dir, "/xy/")
+  
+  plot.out.png <- paste0(root.name, "_dens_", density.filter, ".png")
+  p.png <- res.list %>% lapply(function(x) return(x$p.png))
+  wrap.plots.fanc(p.png, plot.out = plot.out.png)
+  
+  if (do.html == T) {
+    plot.out.html <- paste0(root.name, "_dens_", density.filter, ".html")
+    p.html <- res.list %>% lapply(function(x) return(x$p.html))
+    wrap.plots.fanc(p.png, plot.out = plot.out.html)
+  }
+  
+  return(pbl)
 }
-deseq2.summary <- function(pbl, padj.cutoff = 0.05, force = F, stats.file = NULL, gene.out.dir = NULL) {
+deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
+                           rank.by = "padj",
+                           padj.cutoff = 0.05, log2fc.cutoff = 1, 
+                           annot = F, annot.genome,
+                           force = T, save = F,
+                           stats.file = NULL, gene.out.dir = NULL) {
+  # rank: padj or log2FoldChange
+  if (save) {
+    if (is.null(gene.out.dir)) {
+      work.dir <- attr(pbl, "work.dir")
+      if (is.null(work.dir)) {
+        stop("attr(pbl, 'work.dir') returned null")
+      } else {
+        gene.out.dir <- paste0(work.dir, "/", summary.slot, "/")
+      }
+    }
+    if (is.null(stats.file)) {
+      stats.file <- paste0(gene.out.dir, "/stats.tsv")
+    }
+  }
+  
   pbl <- pbl[sapply(pbl, is.list)]
   s2b.names <- names(pbl)
+
   pbl <- lapply(s2b.names, function(s2b.name) {
     s2b <- pbl[[s2b.name]]
-    if (is.null(s2b$summary) || force == T) {
-      de.df <- s2b$res.exp %>% filter(padj < padj.cutoff) %>% arrange(padj) %>% select(gene, log2FoldChange)
-      s2b$summary <- list(padj.cutoff = padj.cutoff, 
+    if (is.null(s2b[[res.slot]])) {
+      return(s2b)
+    }
+    if (is.null(s2b[[summary.slot]]) || force == T) {
+      de.df <- s2b[[res.slot]] %>% as.data.frame() 
+      if (is.null(de.df$gene))
+        de.df <- de.df %>%  dplyr::mutate(., gene = rownames(.))
+      de.df <- de.df %>% filter(padj < padj.cutoff, abs(log2FoldChange) > log2fc.cutoff)
+      if (rank.by == "padj")
+        de.df <- de.df %>% arrange(!!as.name(rank.by)) 
+      else if (rank.by == "log2FoldChange")
+        de.df <- de.df %>% arrange(desc(abs(!!as.name(rank.by))))
+      de.df <- de.df %>% dplyr::select(gene, log2FoldChange)
+      s2b[[summary.slot]] <- list(padj.cutoff = padj.cutoff, 
+                          log2fc.cutoff = log2fc.cutoff,
                           n.de = nrow(de.df),
                           n.up = nrow(de.df %>% filter(log2FoldChange > 0)),
                           n.down = nrow(de.df %>% filter(log2FoldChange < 0)),
                           de.genes = de.df$gene,
                           up.genes = de.df %>% filter(log2FoldChange > 0) %>% pull(gene),
                           down.genes = de.df %>% filter(log2FoldChange < 0) %>% pull(gene))
+
       if (!is.null(gene.out.dir)) {
         system(paste0("mkdir -p ", gene.out.dir))
         lapply(c("de.genes", "up.genes", "down.genes"), function(type) {
-          write(s2b$summary[[type]], paste0(gene.out.dir, "/", s2b.name, "_", type, ".txt"), sep = "\n")
+          write(s2b[[summary.slot]][[type]], paste0(gene.out.dir, "/", s2b.name, "_", type, ".txt"), sep = "\n")
+          if (grepl(":", s2b[[summary.slot]][[type]][1])) {
+            # if ATAC
+            gr <- s2b[[res.slot]] %>% as.data.frame()
+            if (is.null(gr$gene)) {
+              gr <- gr %>% dplyr::mutate(., gene = rownames(.))
+            } 
+            gr <- gr %>% dplyr::filter(gene %in% s2b[[summary.slot]][[type]]) %>% 
+              utilsFanc::loci.2.df(loci.col.name = "gene", remove.loci.col = T, return.gr = T) 
+            if(annot) {
+              gr <- utilsFanc::gr.fast.annot(obj = gr, genome = annot.genome, use.klraps = F)
+            }
+            out.bed <- paste0(gene.out.dir, "/", s2b.name, "_", type, ".bed")
+            utilsFanc::write.zip.fanc(
+              gr, bed.shift = T,
+              out.file = out.bed)
+            write.table(utilsFanc::gr2df(gr), out.bed, quote = F, sep = "\t", 
+                        col.names = T, row.names = F)
+          }
           return()
         })
       }
@@ -720,37 +963,156 @@ deseq2.summary <- function(pbl, padj.cutoff = 0.05, force = F, stats.file = NULL
     return(s2b)
   })
   names(pbl) <- s2b.names
-  
+  if (!is.null(gene.out.dir)) {
+    if (is.null(stats.file)) 
+      stats.file <- paste0(gene.out.dir, "/stats.tsv")
+  }
   if (!is.null(stats.file)) {
     stats <- lapply(names(pbl), function(name) {
-      stats <- pbl[[name]]$summary[c("n.de", "n.up", "n.down")] %>% as.data.frame()
+      if (is.null(pbl[[name]][[summary.slot]])) {
+        return()
+      }
+      stats <- pbl[[name]][[summary.slot]][c("n.de", "n.up", "n.down")] %>% as.data.frame()
       stats <- utilsFanc::add.column.fanc(df1 = stats, df2 = data.frame(name = name), pos = 1)
       return(stats)
     }) %>% Reduce(rbind, .)
     system(paste0("mkdir -p ", dirname(stats.file)))
     write.table(stats, stats.file, row.names = F, col.names = T, sep = "\t", quote = F)
-    
+    deseq2.stats.barplot(stats.df = stats.file)
   }
   return(pbl)
 }
 
-deseq2.plot.panel <- function(pbl, so, padj.cutoff, max.plots = 50, plot.type = c("de.genes", "up.genes", "down.genes"),
-                              order = F, assay, reduction = "umap", cluster.ident =NULL,
+deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters", "Clusters"),
+                                 plot.out = NULL) {
+  if (is.character(stats.df)) {
+    if (is.null(plot.out)) {
+      plot.out <- paste0(tools::file_path_sans_ext(stats.df), ".pdf")
+    }
+    stats.df <- read.table(stats.df, header = T)
+  }
+  required.cols <- c("name", "n.up", "n.down")
+  utilsFanc::check.intersect(required.cols, "required columns",
+                             colnames(stats.df), "colnames(stats.df)")
+  for (rm in cluster.ident.rm) {
+    stats.df$name <- sub(paste0(rm, "_*"), "", stats.df$name)
+  }
+  stats.df$name <- factor(stats.df$name, levels = gtools::mixedsort(unique(stats.df$name)))
+  stats.df <- stats.df %>% 
+    reshape2::melt(measure.vars = c("n.up", "n.down"),
+                   variable.name = "type", value.name = "n.genes")
+  p <- ggplot(stats.df, aes(x = name, y = n.genes, fill = type)) +
+    geom_bar(stat = 'identity', position = "dodge") +
+    geom_text(aes(label = n.genes), position = position_dodge(width = 0.8))
+  if (!is.null(plot.out)) {
+    dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+    ggsave(plot.out, p, width = 0.5 * length(unique(stats.df$name)) + 2, height = 5, dpi = 100)
+  }
+  
+  invisible(p)
+}
+deseq2.filter.summ.by.overlap <- function(pbl, slot = "summary", slot.new, 
+                                          filter.by, center.pbl = F, center.filter = F,
+                                          out.dir = NULL) {
+  # filter.by: a list of loci that matches the root.names of each cluster.
+  # eg: filter.by = list(GMP = c("chr1:100-200", "chr2:200-300"),
+  #                      MEP = c("chr1:300-400", "chr3:400-500"))
+  clusters <- sapply(pbl, function(x) return(x$root.name)) %>% 
+    `names<-`(NULL)
+  if (!is.list(filter.by)) {
+    filter.by <- rep(list(filter.by), length(clusters))
+    names(filter.by) <- clusters
+  }
+
+  if (!identical(sort(clusters), sort(names(filter.by)))) {
+    stop("!identical(sort(clusters), sort(names(filter.by)))")
+  }
+  pbl <- lapply(pbl, function(a2b) {
+    new.summ <- a2b[[slot]]
+    for (type in c("de", "up", "down")) {
+      g <- paste0(type, ".genes")
+      gf <- paste0(type, ".genes.failed")
+      bPass <- new.summ[[g]] %>%
+        in.loci(x = ., y = filter.by[[a2b$root.name]], 
+                  center.x = center.pbl, center.y = center.filter)
+      new.summ[[gf]] <- new.summ[[g]][!bPass]
+      new.summ[[g]] <- new.summ[[g]][bPass]
+      
+      n <- paste0("n.", type)
+      nf <- paste0("n.", type, ".failed")
+      new.summ[[n]] <- length(new.summ[[g]])
+      new.summ[[nf]] <- length(new.summ[[gf]])
+      
+      if (!is.null(out.dir)) {
+        dir.create(out.dir, showWarnings = F, recursive = T)
+        lapply(c("filtered", "failed"), function(pass.type) {
+          suffix <- if_else(pass.type == "failed", ".failed", "")
+          loci <- new.summ[[paste0(type, ".genes", suffix)]]
+          out.file <- paste0(out.dir, "/",a2b$root.name, "_", type, "_", pass.type, ".genes.txt")
+          write(loci, out.file, sep = "\n")
+          out.bed <- sub(".txt$", ".bed", out.file)
+          utilsFanc::write.zip.fanc(df = utilsFanc::loci.2.gr(loci), out.file = out.bed, bed.shift = T)
+          return()
+        })
+      }
+    }
+    new.summ$filtered.by.overlap <- T
+    a2b[[slot.new]] <- new.summ
+    return(a2b)
+  })
+  if (!is.null(out.dir)) {
+    stats.file <- paste0(out.dir, "/stats_filtered.tsv")
+    stats <- lapply(names(pbl), function(name) {
+      if (is.null(pbl[[name]][[slot.new]])) {
+        return()
+      }
+      stats <- pbl[[name]][[slot.new]][c("n.de", "n.up", "n.down", 
+                                         "n.de.failed", "n.up.failed", "n.down.failed")] %>% 
+        as.data.frame()
+      stats <- utilsFanc::add.column.fanc(df1 = stats, df2 = data.frame(name = name), pos = 1)
+      return(stats)
+    }) %>% Reduce(rbind, .)
+    system(paste0("mkdir -p ", dirname(stats.file)))
+    write.table(stats, stats.file, row.names = F, col.names = T, sep = "\t", quote = F)
+  }
+  return(pbl)
+}
+
+deseq2.plot.panel <- function(pbl, so, max.plots = 50, summary.slot = "summary", padj.cutoff,
+                              plot.type = c("up.genes", "down.genes"),
+                              order = F, assay, reduction = "umap", cluster.ident =NULL, 
                               sample.order = NULL,
+                              n.col = NULL, page.limit = 20, panel.label = T,
+                              violin.swap = F,
                               plot.dir, root.name = NULL, threads = 6,
-                              violin = F, violin.clusters = NULL) {
+                              violin = F, violin.clusters = NULL,
+                              violin.single.cluster = F, ident.root.name) {
   if (!is.null(sample.order)) {
+    so <- so[, so$sample %in% sample.order]
     so$sample <- factor(so$sample, levels = sample.order)
   }
   n.split <- so$sample %>% unique() %>% length()
   trash <- utilsFanc::safelapply(names(pbl), function(name) {
     s2b <- pbl[[name]]
-    df <- s2b$res.exp %>% filter(padj < padj.cutoff) %>% 
-      select(gene, padj, log2FoldChange) %>% arrange(padj)
-    gene.list <- list()
-    gene.list$de.genes <- df$gene
-    gene.list$up.genes <- df %>% filter(log2FoldChange > 0) %>% pull(gene)
-    gene.list$down.genes <- df %>% filter(log2FoldChange < 0) %>% pull(gene)
+    if (is.null(summary.slot)) {
+      df <- s2b$res.exp %>% filter(padj < padj.cutoff) %>% 
+        select(gene, padj, log2FoldChange) %>% arrange(padj)
+      gene.list <- list()
+      gene.list$de.genes <- df$gene
+      gene.list$up.genes <- df %>% filter(log2FoldChange > 0) %>% pull(gene)
+      gene.list$down.genes <- df %>% filter(log2FoldChange < 0) %>% pull(gene)
+    } else {
+      if (!is.null(s2b[[summary.slot]])) {
+        gene.list <- s2b[[summary.slot]][c("de.genes", "up.genes", "down.genes")]
+        gene.list <- lapply(gene.list, function(genes) {
+          genes <- s2b$res %>% as.data.frame() %>% .[genes, ] %>% 
+            dplyr::arrange(padj) %>% rownames()
+          return(genes)
+        })
+      } else {
+        stop("!is.null(s2b[[summary.slot]])")
+      }
+    }
     lapply(names(gene.list), function(type) {
       if (! type %in% plot.type)
         return()
@@ -764,9 +1126,10 @@ deseq2.plot.panel <- function(pbl, so, padj.cutoff, max.plots = 50, plot.type = 
         plot.out <- paste0(plot.dir, "/", name, "..", assay, "..", type, "..", order, ".pdf")
         
         trash <- plot.panel.list(panel.list = genes, obj = so, order = order, assay = assay, split.by = "sample", 
-                                 plot.out = plot.out, raster = T,
-                                 pt.size = 1.2, auto.adjust.raster.pt.size = F, page.limit = 20, max.quantile = 0.99,
-                                 n.split = n.split, reduction = reduction, ident = cluster.ident)
+                                 plot.out = plot.out, raster = T, label = panel.label,
+                                 pt.size = 1.2, auto.adjust.raster.pt.size = F, page.limit = page.limit,
+                                 max.quantile = 0.99,
+                                 n.split = n.split, reduction = reduction, ident = cluster.ident, n.col = n.col)
         
       } else {
         print(genes)
@@ -774,8 +1137,22 @@ deseq2.plot.panel <- function(pbl, so, padj.cutoff, max.plots = 50, plot.type = 
           name <- paste0(root.name, "..", name)
         }
         plot.out <- paste0(plot.dir, "/", name, "..", assay, "..", type, "..", order, ".vln.pdf")
+        
+        if (violin.single.cluster == T) {
+          violin.clusters <- name %>% sub(ident.root.name, "", .) %>% sub("_", "", .)
+        }
+        if (violin.swap == T) {
+          so <- so[, so@meta.data[, cluster.ident] %in% violin.clusters]
+          split.by <- cluster.ident
+          split.order <- violin.clusters
+          cluster.ident <- "sample"
+          violin.clusters <- sample.order
+        } else {
+          split.by <- "sample"
+          split.order <- sample.order
+        }
         trash <- plot.panel.list(panel.list = genes, obj = so, order = order, assay = assay, 
-                                 split.by = "sample", split.order = sample.order,
+                                 split.by = split.by, split.order = split.order,
                                  ident = cluster.ident, cluster = violin.clusters,
                                  n.col = 6,
                                  plot.out = plot.out, 
@@ -877,20 +1254,29 @@ de.soup.stability <- function(main.pbl, clusters = NULL, rhos, titrate.dir, rank
   
 }
 
-deseq2.write.results <- function(pb.m, work.dir) {
-  system(paste0("mkdir -p ", work.dir, "/table/"))
+deseq2.write.results <- function(pb.m, out.dir, root.name = NULL) {
+  if (is.null(root.name)) {
+    root.name <- basename(out.dir)
+  }
+  system(paste0("mkdir -p ", out.dir))
   trash <- lapply(names(pb.m), function(name) {
     s2b <- pb.m[[name]]
-    write.table(s2b$res.exp, paste0(work.dir, "/table/", name, ".tsv"), quote = F, row.names = F,
+    write.table(s2b$res.exp, paste0(out.dir, "/", root.name, "_", name, ".tsv"), quote = F, row.names = F,
                 col.names = T, sep = "\t")
   })
 }
 
-deseq2.pipe.ez <- function(soi, pb.m = NULL, samples, pbl.soup, assay, reduction = "UAP", 
-                           cluster.ident, clusters, violin.clusters = NULL,
-                           work.dir, plot.only = F, plot.xy = T, plot.panel = T, plot.violin = T,
+deseq2.pipe.ez <- function(soi, plot.only = T, pb.m = NULL, samples, pbl.soup = NULL,
+                           assay, order = F, reduction, comp.vec, comp.meta = NULL,
+                           summary.slot = "summary",
+                           cluster.ident, clusters, 
+                           panel.page.limit = 20, n.col = NULL, panel.label = T,
+                           violin.cluster.ident = NULL,violin.single.cluster = F, violin.clusters = NULL, violin.swap = F,
+                           work.dir, 
+                           plot.xy = T, plot.panel = T, max.plots = 50, plot.violin = T,
                            padj.cutoff = 0.05, threads = 1) {
   if (plot.only == F) {
+    stop("the deseq2 part has not been generalized")
     pb.m <- bulk.list(so = soi, assay = assay, slot = "counts",
                       cluster.ident = cluster.ident, clusters = clusters,
                       coldata.columns = c("rep", "type"), 
@@ -902,20 +1288,19 @@ deseq2.pipe.ez <- function(soi, pb.m = NULL, samples, pbl.soup, assay, reduction
     if (is.null(pb.m))
       pb.m <- readRDS(paste0(work.dir, "/bulk.list.Rds"))
   }
-  
   if (plot.xy == T) {
     try({
-      deseq2.xyplot(pbl = pb.m, pbl.soup = pbl.soup, 
+      deseq2.xyplot(pbl = pb.m, pbl.soup = pbl.soup, summ.slot = summary.slot,
                     plot.dir = paste0(work.dir, "/plots_xy_w_soup/"), 
-                    comp.vec = c("tumor_rep1:ctrl_rep1", "tumor_rep3:ctrl_rep3"), 
+                    comp.vec = comp.vec, comp.meta = comp.meta,
                     root.name = paste0("linear_0.99"), quantile.limit = 0.99, 
                     padj.cutoff = padj.cutoff, threads = threads)
     })
     
     try({
-      deseq2.xyplot(pbl = pb.m, pbl.soup = pbl.soup, 
+      deseq2.xyplot(pbl = pb.m, pbl.soup = pbl.soup, summ.slot = summary.slot,
                     plot.dir = paste0(work.dir, "/plots_xy_w_soup/") , 
-                    comp.vec = c("tumor_rep1:ctrl_rep1", "tumor_rep3:ctrl_rep3"), 
+                    comp.vec = comp.vec, comp.meta = comp.meta,
                     root.name = paste0("log2"), quantile.limit = NULL, 
                     transformation = log2,
                     padj.cutoff = padj.cutoff, threads = threads)
@@ -925,19 +1310,26 @@ deseq2.pipe.ez <- function(soi, pb.m = NULL, samples, pbl.soup, assay, reduction
   if (plot.panel == T) {
     try({
       deseq2.plot.panel(pbl = pb.m, so = soi, padj.cutoff = padj.cutoff, plot.type = c("up.genes", "down.genes"), 
-                        sample.order = samples, cluster.ident = cluster.ident,
-                        max.plots = 50, order = F, assay = assay, reduction = reduction,
-                        threads = 4, plot.dir = paste0(work.dir, "/panel/"))
+                        sample.order = samples, cluster.ident = cluster.ident, summary.slot = summary.slot,
+                        max.plots = max.plots, order = order, assay = assay, reduction = reduction,
+                        threads = threads, plot.dir = paste0(work.dir, "/panel/"), root.name = summary.slot,
+                        n.col = n.col, page.limit = panel.page.limit, panel.label = panel.label)
     })
   }
   if (plot.violin == T) {
     try({
+      # we need to specify violin.clusters because if we plot all clusters, 
+      # it will be too wide (too many violins), especially if
+      # you have multiple samples.
+      if (is.null(violin.cluster.ident))
+        violin.cluster.ident <- cluster.ident
       deseq2.plot.panel(pbl = pb.m, so = soi, padj.cutoff = padj.cutoff, plot.type = c("up.genes", "down.genes"), 
                         sample.order = samples,
-                        max.plots = 10, order = F, assay = assay, reduction = reduction,
-                        plot.dir = paste0(work.dir, "/violin/"), violin = T, 
-                        cluster.ident = cluster.ident, violin.clusters = violin.clusters, 
-                        threads = threads.plotting)
+                        max.plots = max.plots, order = F, assay = assay, reduction = reduction,
+                        plot.dir = paste0(work.dir, "/violin/"), violin = T, violin.swap = violin.swap,
+                        cluster.ident = violin.cluster.ident, violin.single.cluster = violin.single.cluster,
+                        violin.clusters = violin.clusters, ident.root.name = cluster.ident,
+                        threads = threads)
     })
   }
   return()
@@ -997,10 +1389,14 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
   for (i in pc.list) {
     comp <- paste0("PC", i)
     p.name <- paste0(comp[1], ".", comp[2])
-    if (length(pca.groupings) >= 2) {
-      pl[[p.name]] <- 
-        ggplot(pcaData, aes_string(comp[1], comp[2], color=pca.groupings[1],
-                                                shape=pca.groupings[2])) +
+    if (length(pca.groupings) >= 1) {
+      if (length(pca.groupings) == 1) {
+        pl[[p.name]] <- ggplot(pcaData, aes_string(comp[1], comp[2], color=pca.groupings[1]))
+      } else {
+        pl[[p.name]] <- ggplot(pcaData, aes_string(comp[1], comp[2], color=pca.groupings[1],
+                                     shape=pca.groupings[2]))
+      }
+       pl[[p.name]] <- pl[[p.name]] +
         geom_point(size=3) +
         xlab(paste0(comp[1], ": ",percentVar[i[1]],"% variance")) +
         ylab(paste0(comp[2], ": ",percentVar[i[2]],"% variance")) + 
@@ -1010,7 +1406,7 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
     } 
     if (!is.na(pca.groupings[3])) {
       pl[[p.name]] <-  pl[[p.name]] + 
-        geom_text(aes_string(label = pca.groupings[3]), color = "black")
+        geom_text(aes_string(label = pca.groupings[3]), color = "black", nudge_y = 2)
     }
   }
   
@@ -1034,7 +1430,7 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
 }
 
 deseq2.homer <- function(dds, fg.vec, n.bg.each = 25, no.replace = F,
-                         samples.for.bg, scatter.xy.df,
+                         samples.for.bg, scatter.xy.df, scatter.meta = NULL, 
                       work.dir, write.log = T,
                       genome, size = "given", thread, denovo = F, other.params = "",
                       find.motifs.path = "/bar/cfan/software/homer/bin/findMotifsGenome.pl",
@@ -1044,21 +1440,27 @@ deseq2.homer <- function(dds, fg.vec, n.bg.each = 25, no.replace = F,
   prep.dir <- paste0(work.dir, "/prep/")
   homer.dir <- paste0(work.dir, "/homer/")
   system(paste0("mkdir -p ", bg.dir, " ", prep.dir, " ", homer.dir))
+  fg.bed <- paste0(prep.dir, "/fg.bed")
+  trash <- utilsFanc::write.zip.fanc(df = utilsFanc::loci.2.df(loci.vec = fg.vec)[, 1:3], out.file = fg.bed)
   
-  bg.vec <- bg.gen.2(mat = norm.mat, fg.vec = fg.vec, n.bg.each = n.bg.each, samples.use = samples.for.bg,
-                     no.replace = no.replace)
-  write(bg.vec, paste0(bg.dir, "/bg.txt"), sep = "\n")
-  bg.assess(mat = norm.mat, fg.vec = fg.vec, bg.vec = bg.vec, scatter.xy.df = scatter.xy.df,
+  if (n.bg.each > 0) {
+    bg.vec <- bg.gen.2(mat = norm.mat, fg.vec = fg.vec, n.bg.each = n.bg.each, samples.use = samples.for.bg,
+                       no.replace = no.replace)
+    write(bg.vec, paste0(bg.dir, "/bg.txt"), sep = "\n")
+    bg.bed <- paste0(prep.dir, "/bg.bed")
+    trash <- utilsFanc::write.zip.fanc(df = utilsFanc::loci.2.df(loci.vec = bg.vec)[, 1:3], out.file = bg.bed)
+  } else {
+    bg.vec <- NULL
+    bg.bed <- NULL
+  }
+  bg.assess(mat = norm.mat, fg.vec = fg.vec, bg.vec = bg.vec, 
+            scatter.xy.df = scatter.xy.df, scatter.meta = scatter.meta, col.data = dds@colData,
             plot.out = paste0(bg.dir, "/bg_assess.png" ))
-  bg.assess(mat = norm.mat, fg.vec = fg.vec, bg.vec = bg.vec, scatter.xy.df = scatter.xy.df,
+  bg.assess(mat = norm.mat, fg.vec = fg.vec, bg.vec = bg.vec, 
+            scatter.xy.df = scatter.xy.df, scatter.meta = scatter.meta, col.data = dds@colData,
             transformation = function(x) return(log2(x + 1)), 
             plot.out = paste0(bg.dir, "/bg_assess_log2.png" ))
   
-  # prepare for homer:
-  fg.bed <- paste0(prep.dir, "/fg.bed")
-  trash <- utilsFanc::write.zip.fanc(df = utilsFanc::loci.2.df(loci.vec = fg.vec)[, 1:3], out.file = fg.bed)
-  bg.bed <- paste0(prep.dir, "/bg.bed")
-  trash <- utilsFanc::write.zip.fanc(df = utilsFanc::loci.2.df(loci.vec = bg.vec)[, 1:3], out.file = bg.bed)
   if (write.log == T)
     log.file <- paste0(homer.dir, "/stdout.log")
   else
@@ -1071,10 +1473,12 @@ deseq2.homer <- function(dds, fg.vec, n.bg.each = 25, no.replace = F,
   return()
 }
 
-a2bl.homer.pipe <- function(a2bl, work.dir,
-                            slot, rank.key, desc = F, top.n.vec = c(100, 200, 300, 500),  # foreground choice
+a2bl.homer.pipe <- function(a2bl, work.dir, slot, summ.slot = "summary", # behaviour change
+                            rank.key, desc = F, top.n.vec = c(100, 200, 300, 500),  # foreground choice
+                            updown.key = "log2FoldChange", trends = c("up", "down"),
                             quantile.interval = NULL, quantile.samples,
-                            n.bg.each = 25, no.replace = F, samples.for.bg, scatter.xy.df, # background choice
+                            n.bg.each = 25, no.replace = F, samples.for.bg,# background choice
+                            scatter.xy.df, scatter.meta = NULL,
                             threads.a2bl = 1, threads.titrate = 4,  threads.homer = 1,
                             genome, size = "given", denovo = F, other.params = "", # homer params
                             find.motifs.path = "/bar/cfan/software/homer/bin/findMotifsGenome.pl", # homer params
@@ -1083,31 +1487,43 @@ a2bl.homer.pipe <- function(a2bl, work.dir,
   trash <- utilsFanc::safelapply(names(a2bl), function(a2b.name) {
     a2b <- a2bl[[a2b.name]]
     utilsFanc::safelapply(top.n.vec, function(top.n) {
-      lapply(c("up", "down"), function(trend) {
+      lapply(trends, function(trend) {
         if (trend == "up")
           trend.f <- `>`
         else
           trend.f <- `<`
-        
-        work.dir <- paste0(work.dir, "/", a2b.name, "/", slot, "_",rank.key, "_top_", top.n,"_", trend, 
-                           paste0(quantile.interval, collapse = ""),"/")
-        prep.dir <- paste0(work.dir, "/prep/")
-        system(paste0("mkdir -p ", work.dir, " ", prep.dir))
+
         fg.df <- a2b[[slot]]
+        if (!is.null(summ.slot)) {
+          warning("using de.genes in summ.slot. behaviour change since 2022-07-07")
+          fg.df <- fg.df %>% dplyr::filter(gene %in% a2b[[summ.slot]]$de.genes)
+        }
         if (!is.null(quantile.interval)) {
           filter.vec <- fg.df[, quantile.samples] %>% rowMeans()
           limits <- quantile(filter.vec, quantile.interval)
           fg.df <- fg.df[filter.vec > limits[1] & filter.vec < limits[2] , ]
         }
-        fg.df <- fg.df %>% filter(trend.f(log2FoldChange, 0)) %>% .[order(.[, rank.key]),]
+        fg.df <- fg.df %>% filter(trend.f(!!as.name(updown.key), 0)) %>% .[order(.[, rank.key]),]
         if (desc == T)
           fg.df <- fg.df[nrow(fg.df):1,]
-        fg.df <- fg.df[1:top.n, ]
+        if (top.n == 0) {
+          # 0 means take all
+          top.n <- nrow(fg.df)
+        }
+        fg.df <- fg.df[1:min(nrow(fg.df), top.n), ]
+        
+        work.dir <- paste0(work.dir, "/", a2b.name, "/", slot, "_",rank.key, "_top_", top.n,"_", trend, 
+                           paste0(quantile.interval, collapse = ""),"/")
+        prep.dir <- paste0(work.dir, "/prep/")
+        system(paste0("mkdir -p ", work.dir, " ", prep.dir))
+        
         write.table(fg.df, paste0(prep.dir, "/fg.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
         fg.vec <- fg.df$gene
+
         deseq2.homer(dds = a2b$dds, fg.vec = fg.vec, n.bg.each = n.bg.each, no.replace = no.replace,
                      samples.for.bg = samples.for.bg, 
-                     scatter.xy.df = scatter.xy.df, work.dir = work.dir, write.log = T, genome = genome, 
+                     scatter.xy.df = scatter.xy.df, scatter.meta = scatter.meta,
+                     work.dir = work.dir, write.log = T, genome = genome, 
                      size = size, denovo = denovo, thread = threads.homer, other.params = other.params, 
                      find.motifs.path = find.motifs.path, homer.path = homer.path, run = homer.run)
         return()
@@ -1154,8 +1570,12 @@ plotPCA.fanc <- function(object, intgroup = "condition", ntop = 500, returnData 
   if (!all(intgroup %in% names(colData(object)))) {
     stop("the argument 'intgroup' should specify columns of colData(dds)")
   }
+  # if (is.null(intgroup) || !all(intgroup %in% names(colData(object)))) {
+  #   stop("the argument 'intgroup' should specify columns of colData(dds)")
+  # }
   intgroup.df <- as.data.frame(colData(object)[, intgroup, 
                                                drop = FALSE])
+
   group <- if (length(intgroup) > 1) {
     factor(apply(intgroup.df, 1, paste, collapse = ":"))
   }
@@ -1179,4 +1599,1070 @@ plotPCA.fanc <- function(object, intgroup = "condition", ntop = 500, returnData 
     geom_point(size = 3) + xlab(paste0("PC1: ", round(percentVar[1] * 
                                                         100), "% variance")) + ylab(paste0("PC2: ", round(percentVar[2] * 
                                                                                                             100), "% variance")) + coord_fixed()
+}
+
+up.down.table <- function(pbl, slot, query.gr.list, use.bulkNorm = F,
+                          trends = c("up", "down"), up.down.key,
+                          write.query.overlap = T, out.dir,
+                          threads.pbl = 1, threads.query = 1,
+                          genome) {
+  # sample.y <- comp %>% sub(":.+$", "",.)
+  # sample.x <- comp %>% sub("^.+:", "",.)
+  stats <- utilsFanc::safelapply(names(query.gr.list), function(gr.name) {
+    query.gr <- query.gr.list[[gr.name]]
+    if (is.character(query.gr)) {
+      query.gr <- utilsFanc::loci.2.gr(query.gr)
+    }
+    stats <- utilsFanc::safelapply(pbl, function(a2b) {
+      lapply(trends, function(trend) {
+        if (trend == "up")
+          trend.f <- `>`
+        else
+          trend.f <- `<`
+        
+        if (use.bulkNorm == T)
+          all.df <- a2b$bulkNorm
+        else
+          all.df <- a2b[[slot]]
+        
+        de.df.bg <-  a2b[[slot]] %>% filter(trend.f(!!as.name(up.down.key), 0))
+        n.bg <- nrow(all.df)
+        n.de.bg <- de.df.bg %>% nrow()
+        pct.de.bg <- n.de.bg/n.bg
+        
+        bg.gr <- utilsFanc::loci.2.df(df = all.df, loci.col.name = "gene", return.gr = T)
+        fg.gr <- bg.gr %>% subsetByOverlaps(query.gr, ignore.strand = T)
+        fg.df <- fg.gr %>% as.data.frame()
+        
+        bg.gr.de <- utilsFanc::loci.2.df(df = de.df.bg, loci.col.name = "gene", return.gr = T)
+        fg.gr.de <- bg.gr.de %>% subsetByOverlaps(query.gr, ignore.strand = T)
+        fg.df.de <- fg.gr.de %>% as.data.frame()
+        
+        n.fg.de <- nrow(fg.df.de)
+        n.fg <- nrow(fg.df)
+        
+        stat <- data.frame(query.name = gr.name, cluster = a2b$root.name, trend = trend, 
+                           n.fg.de = n.fg.de, n.fg = n.fg, 
+                           pct.de.fg = n.fg.de/n.fg, pct.de.bg = pct.de.bg, 
+                           p = pbinom(n.fg.de, n.fg, prob = pct.de.bg, lower.tail = F))
+        
+        if (write.query.overlap == T && n.fg.de > 0) {
+          system(paste0("mkdir -p ", out.dir))
+          anno <- fg.df.de %>% utilsFanc::annotate.fanc(gr = fg.df.de %>% 
+                                                          makeGRangesFromDataFrame(keep.extra.columns = T),
+                                                        genome = genome)
+          anno$gene <- NULL
+          anno <- anno %>% as.data.frame()
+          
+          xlsx::write.xlsx(anno, file = paste0(out.dir, "/", gr.name, "..",a2b$root.name, "_fg_de.xlsx"),
+                           col.names = T, row.names = F)
+          write.table(anno, paste0(out.dir, "/", gr.name, "..", a2b$root.name, "_fg_de.tsv"),
+                      col.names = T, row.names = F)
+        }
+        
+        return(stat)
+      }) %>% Reduce(rbind, .)
+    }, threads = threads.pbl) %>% Reduce(rbind, .)
+    return(stats)
+  }, threads = threads.query) %>% Reduce(rbind, .)
+  
+   utilsFanc::write.zip.fanc(stats, out.file = paste0(out.dir, "/stats.tsv"), row.names = F,
+                             col.names = T, zip = F)
+   return(stats)
+}
+
+comp.vec.gen <- function(group.var, comp.var, return.df = F) {
+  if (length(comp.var) != 2) {
+    stop("length(comp.var) != 2")
+  }
+  res <- lapply(group.var, function(group) {
+    return(paste0(paste0(group, "..", comp.var), collapse = ":"))
+  }) %>% unlist()
+  if (return.df == T) {
+    res <- data.frame(x = res %>% sub(".+:", "", .),
+                      y = res %>% sub(":.+", "", .))
+  }
+  return(res)
+}
+
+deseq2.hm <- function(pbl, plot.dir, root.name = NULL, threads = 1,
+                      dense.hm = T, dense.cutoff = 30,
+                      width = NULL, height = NULL, res = 100,
+                      ...) {
+  if (is.null(root.name)) {
+    root.name <- basename(plot.dir)
+  }
+  utilsFanc::safelapply(pbl, function(s2b) {
+    plot.out <- paste0(plot.dir, "/", root.name, "_", s2b$root.name, "_q", s2b$summary$padj.cutoff, ".pdf")
+    if (is.null(s2b$summary)) {
+      stop("is.null(s2b$summary). run deseq2.summary first")
+    }
+    hm.core.2(s2b = s2b, 
+              add.basemean = T,
+              dense.hm = dense.hm, dense.cutoff = dense.cutoff,
+              plot.out = plot.out, 
+              width = width, height = height, res = res, ...)
+    return(NULL)
+  }, threads = threads)
+  return()
+}
+
+
+deseq2.volcano.plot <- function(pbl, comp, label.top.n = 15, 
+                                res.slot = "res", summary.slot = "summary",
+                                out.file, xintercept = c(-1, 1)) {
+  pl <- lapply(pbl, function(s2b) {
+    plot.df <- s2b[[res.slot]] %>% as.data.frame() %>%  mutate(., gene = rownames(.)) %>% 
+      mutate(mlog10pvalue = -log10(pvalue))
+    genes.label <- c(s2b[[summary.slot]]$up.genes[1:label.top.n],
+                     s2b[[summary.slot]]$down.genes[1:label.top.n]) %>% .[!is.na(.)]
+    p <- xy.plot(df = plot.df, x = "log2FoldChange", y = "mlog10pvalue", 
+            add.abline = F, pt.color = "grey50", highlight.var = "gene",
+            highlight.values = s2b[[summary.slot]]$de.genes, highlight.ptsize = 0.2, 
+            label.var = "gene", label.values = genes.label, use.repel = T) + 
+      geom_vline(xintercept = xintercept, linetype = "dashed", color = "blue", alpha = 0.5) + 
+      ggtitle(s2b$root.name) +
+      theme(aspect.ratio = 1) +
+      theme(text = element_text(size = 15))
+    
+    type.y <- comp %>% sub(":.+", "", .)
+    type.x <- comp %>% sub(".+:", "", .)
+    
+    grob <- grobTree(textGrob(paste0(type.x, " > ",type.y,", n=", s2b[[summary.slot]]$n.down),
+                              x=0.05,  y=0.05, hjust=0,
+                              gp=gpar(col="blue", fontsize=13)))
+    p <- p + annotation_custom(grob)
+    
+    grob <- grobTree(textGrob(paste0(type.y, " > ",type.x,", n=", s2b[[summary.slot]]$n.up),
+                              x=0.7,  y=0.05, hjust=0,
+                              gp=gpar(col="blue", fontsize=13)))
+    p <- p + annotation_custom(grob)
+
+    return(p)
+    
+  })
+  
+  trash <- wrap.plots.fanc(plot.list = pl, plot.out = out.file, sub.height = 8,
+                  sub.width = 8)
+  return()
+}
+
+a2bl.distro <- function(a2bl, summary.slot = "summary",
+                        genome,
+                        mode = "pro_vs_enh", promoter.boundaries = c(-1000, 500),
+                        plot.out = NULL) {
+  if (any(sapply(a2bl, function(x) is.null(x[[summary.slot]])))) {
+    stop("summary.slot not found in at least 1 of the a2bl elements")
+  }
+  if (genome == "mm10") {
+    genome.name <- "BSgenome.Mmusculus.UCSC.mm10"
+    annoDb <- "org.Mm.eg.db"
+    TxDb <- TxDb.Mmusculus.UCSC.mm10.knownGene::TxDb.Mmusculus.UCSC.mm10.knownGene
+  } else {
+    stop("only mm10 has been developed!")
+  }
+  a2bl <- lapply(a2bl, function(a2b) {
+    if (mode == "pro_vs_enh") {
+      gr <- rownames(a2b$dds) %>% utilsFanc::loci.2.gr()
+      gr <- ChIPseeker::annotatePeak(gr, tssRegion = promoter.boundaries, TxDb = TxDb, annoDb = annoDb)@anno
+      gr$proEnh <- NA
+      gr$proEnh[gr$annotation == "Promoter"] <- "promoter"
+      gr$proEnh[gr$annotation != "Promoter"] <- "enhancer"
+      
+      # it's definitely not a gene. But using the "gene" nomenclature to make left join easier
+      df <- data.frame(gene = utilsFanc::gr.get.loci(gr), proEnh = gr$proEnh)
+      
+      summ <- a2b[[summary.slot]]
+      de.df <- lapply(c("up", "down"), function(type) {
+        sub.df <- data.frame(gene = summ[[paste0(type, ".genes")]], deStat = type)
+        return(sub.df)
+      }) %>% Reduce(rbind, .)
+      
+      df <- left_join(df, de.df)
+      df$deStat[is.na(df$deStat)] <- "non_de"
+      stats <- df %>% group_by(proEnh, deStat) %>% 
+        summarise(n = n()) %>% ungroup() %>% as.data.frame()
+      summ[[mode]] <- stats
+      a2b[[summary.slot]] <- summ
+      return(a2b)
+    } else {
+      stop("only pro_vs_enh has been developed")
+    }
+  })
+  if (!is.null(plot.out)) {
+    pl <- lapply(a2bl, function(a2b) {
+      stats <- a2b[[summary.slot]][[mode]]
+      if (mode == "pro_vs_enh") {
+        pl <- lapply(c("proEnh", "deStat"), function(x) {
+          group <- c("proEnh", "deStat") %>% .[!. %in% x]
+          stats <- stats %>% group_by(!!as.name(x)) %>% 
+            dplyr::mutate(pct = round(n/sum(n), digits = 3)) %>% 
+            as.data.frame()
+          pl <- lapply(c("n", "pct"), function(type) {
+            p <- ggplot(stats, aes_string(x = x, y = type, fill = group)) +
+              geom_bar(stat = "identity") +
+              theme_bw() +
+              theme(aspect.ratio = 1) +
+              theme(text = element_text(size = 15)) +
+              ggtitle(a2b$root.name)
+            return(p)
+          })
+          return(pl)
+        }) %>% Reduce(c, .)
+        return(pl)
+      } else {
+        stop("only pro_vs_enh has been developed")
+      }
+      
+    }) %>% Reduce(rbind, .)
+    trash <- wrap.plots.fanc(plot.list = pl, n.split = 4, plot.out = plot.out)
+  }
+  return(a2bl)
+}
+
+a2bl.distro.titrate.log2FC <- function(a2bl, df = NULL, log2FC.vec = c(0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2),
+                                       de.type = "down", 
+                                       text.size = 20, cluster.levels = NULL,
+                                       width = 8, height = 4,
+                                       plot.out) {
+  if (is.null(df)) {
+    df <- lapply(log2FC.vec, function(log2fc) {
+      a2bl <- deseq2.summary(pbl = a2bl, log2fc.cutoff = log2fc)
+      a2bl <- a2bl.distro(a2bl = a2bl, genome = "mm10")
+      stats <- lapply(a2bl, function(a2b) {
+        stats <- a2b$summary$pro_vs_enh %>% 
+          dplyr::mutate(log2fc = log2fc, cluster = a2b$root.name, pct = n/sum(n))
+        return(stats)
+      }) %>% Reduce(rbind, .)
+      return(stats)
+    }) %>% Reduce(rbind, .)
+    
+    rds <- paste0(tools::file_path_sans_ext(plot.out), ".Rds")
+    saveRDS(df, rds)
+  } else {
+    if (is.character(df)) {
+      df <- readRDS(df)
+    }
+  }
+  df <- df %>% dplyr::filter(deStat %in% de.type)
+  pl <- df %>% split(f = df$deStat) %>% 
+    lapply(function(df) {
+      df$lineGroup <- paste0(df$cluster, "_",  df$proEnh)
+      if (!is.null(cluster.levels)) {
+        df$cluster <- factor(df$cluster, levels = cluster.levels)
+      }
+      p <- ggplot(df, aes(x = log2fc, y = pct, group = lineGroup, color = cluster)) +
+        geom_point(shape = 17) +
+        geom_line(aes(linetype = proEnh)) +
+        theme_classic() +
+        ggtitle(df$deStat[1]) +
+        scale_y_continuous(labels = scales::percent) +
+        theme(text = element_text(size = text.size)) 
+        # theme(aspect.ratio = 1)
+      return(p)
+    })
+  wrap.plots.fanc(plot.list = pl, sub.width = width, sub.height = height, plot.out = plot.out)
+  
+  return(df)
+}
+
+a2bl.distro.check <- function(da, slot = "summary", tss.file, ext.1side = 0,
+                              out.dir, bedtools = "/bar/cfan/anaconda2/envs/jupyter/bin/bedtools") {
+  print("written as a sanity check for a2bl.distro()")
+  sub.f <- function(a, b, ext.b, bV, out) {
+    if (bV) {
+      v.flag <- "-v"
+    } else {
+      v.flag <- ""
+    }
+    cmd <- paste0("cat ", b, 
+                  " | awk -F '\\t' 'BEGIN {OFS = FS} {$2 = $2 - ", ext.b, "; $3 = $3 + ", ext.b, "; print $0}'", " | ", 
+                  bedtools, " intersect ",v.flag, " -a ", a, " -b stdin -wa -wb ",
+                  " > ", out)
+    print(cmd); system(cmd)
+  }
+  stats <- lapply(da, function(a2b) {
+    name <- a2b$root.name
+    peak.file <- paste0(out.dir, "/", name, "_peaks.bed")
+    utilsFanc::write.zip.fanc(utilsFanc::loci.2.gr(a2b$bulkNorm$gene), 
+                              out.file = peak.file, bed.shift = T)
+    types <- c("pro", "enh")
+    files <- lapply(types, function(type) {
+      file <- paste0(out.dir, "/", name, "_", type, "_ext", ext.1side, ".bed")
+      sub.f(a = peak.file, b = tss.file, ext.b = ext.1side, 
+            bV = (type != "pro"), out = file)
+      return(file)
+    })
+    names(files) <- types
+    peaks <- lapply(files, function(file) {
+      peaks <- read.table(file)
+      peaks <- paste0(peaks$V1, ":", peaks$V2+1, "-", peaks$V3)
+      return(peaks)
+    })
+    stats <- lapply(types, function(type) {
+      stats <- data.frame(n = length(peaks[[type]]), 
+                          n.down = length(peaks[[type]][peaks[[type]] %in% a2b[[slot]]$down.genes]))
+      stats$pct.down <- stats$n.down/stats$n
+      colnames(stats) <- paste0(colnames(stats), ".", type)
+      return(stats)
+    }) %>% Reduce(cbind, .)
+    stats <- cbind(data.frame(cluster = name), stats)
+    return(stats)
+  }) %>% do.call(rbind,.)
+  write.table(stats, file = paste0(out.dir,"/ext_", ext.1side, "_stats.tsv"),
+              quote = F, row.names = F, col.names = T, sep = "\t")
+  return(stats)
+}
+
+de.non.de <- function(pbl, out.dir, fc.th = 1.1, slot = "res.exp",
+                      n.rand = 1000, n.top = 1000,
+                      root.name = NULL, rank.by = "baseMean") {
+  root.name <- root.name %||% basename(out.dir)
+  dir.create(out.dir, showWarnings = F, recursive = T)
+  df <- lapply(pbl, function(s2b) {
+    log2fc.th <- log2(c(1/fc.th, fc.th))
+    df <- s2b[[slot]] %>% 
+      dplyr::filter(log2FoldChange > log2fc.th[1], log2FoldChange < log2fc.th[2]) %>% 
+      dplyr::arrange(desc(!!as.name(rank.by))) %>% 
+      dplyr::select(gene, !!as.name(rank.by))
+    out.file <- paste0(out.dir, "/", root.name, "_", s2b$root.name, 
+                       "_", fc.th, "_by_", rank.by, ".tsv")    
+    if (!grepl(":", df$gene[1])) {
+      write.table(df, out.file, sep = "\t", col.names = T, row.names = F, quote = F)
+    } else {
+      out.file <- sub(".tsv$", ".bed", out.file)
+      df <- utilsFanc::loci.2.df(df, loci.col.name = "gene", remove.loci.col = T)
+      df$start <- df$start - 1
+      write.table(df, out.file, sep = "\t", col.names = F, row.names = F, quote = F)
+    }
+    df$cluster <- s2b$root.name
+    return(df)
+  }) %>% do.call(rbind, .)
+
+  if ("gene" %in% colnames(df)) {
+    suffix <- ".tsv"
+    bed.flag <- F
+  } else {
+    suffix <- ".bed"
+    bed.flag <- T
+  }
+  df.rand <- df %>% split(., f = .$cluster) %>% 
+    lapply(function(x) return(x[sample(1:nrow(x), size = min(n.rand, nrow(x)), replace = F),])) %>% 
+    do.call(rbind, .)
+  out.file <- paste0(out.dir, "/", root.name, "_", "all", 
+                     "_", fc.th, "_by_", rank.by, "_rand",n.rand, suffix)
+  write.table(df.rand, out.file, sep = "\t", col.names = !bed.flag, row.names = F, quote = F)
+  
+  df.top <- df %>% split(., f = .$cluster) %>% 
+    lapply(function(x) return(x[1:min(n.top, nrow(x)),])) %>% 
+    do.call(rbind, .)
+  out.file <- paste0(out.dir, "/", root.name, "_", "all", 
+                     "_", fc.th, "_by_", rank.by, "_top",n.top, suffix)
+  write.table(df.top, out.file, sep = "\t", col.names = !bed.flag, row.names = F, quote = F)
+  return()
+}
+
+da.pileup.DAR <- function(summ.dir, clusters, bw.dir, 
+                          n.peaks = 1000, seed = 42,
+                          threads.clusters = 1, threads.each = 6,
+                          out.dir) {
+  bed.dir <- paste0(out.dir, "/bed/")
+  peaks <- lapply(clusters, function(cluster) {
+    lapply(c("up", "down"), function(type) {
+      peaks <- readLines(paste0(summ.dir, "/", cluster, "_", type, ".genes.txt"))
+      set.seed(seed = seed)
+      rand <- peaks %>% .[sort(sample(1:length(.), min(n.peaks, length(.)), replace = F))]
+      gr <- utilsFanc::loci.2.gr(rand)
+      out.file <- paste0(bed.dir, "/", cluster, "_", type, "_rand", n.peaks, "_seed", seed, ".bed")
+      utilsFanc::write.zip.fanc(df = gr, bed.shift = T, zip = T, out.file = out.file)
+      return(out.file)
+    }) %>% unlist() %>% return()
+  })
+  
+  names(peaks) <- clusters
+  
+  bws <- lapply(clusters, function(cluster) {
+    glob <- paste0(bw.dir, "/", cluster, "*")
+    bws <- Sys.glob(glob)
+    if (length(bws) < 1) {
+      stop(paste0("glob failed for: ", glob))
+    }
+    return(bws)
+  })
+  names(bws) <- clusters
+  
+  utilsFanc::safelapply(clusters, function(cluster) {
+    deeptools.refpoint(bw.vec = bws[[cluster]], regions.vec = peaks[[cluster]], 
+                       threads = threads.each, out.dir = out.dir, root.name = cluster)
+  }, threads = threads.clusters)
+  return()
+}
+
+### wrote for Jun
+da.cmp <- function(query, ref, query.name, ref.name,
+                   clusters = NULL, slot = "res.exp",
+                   col = "log2FoldChange", abs.diff = F, 
+                   other.cols = NULL, bSimple = F,
+                   query.summ.slot, 
+                   add.trend = F, color.density = F,
+                   threads = 1, out.dir, root = NULL,
+                   bScatter = F, use.plotly = F) {
+  # query and ref should both be pbl.
+  if (is.null(root)) {
+    root <- basename(out.dir)
+  }
+  clusters.avail <- intersect(names(query), names(ref))
+  if (is.null(clusters)) 
+    clusters <- clusters.avail
+  clusters <- clusters %>% .[. %in% clusters.avail]
+  if (length(clusters) < 1) {
+    stop("length(clusters) < 1")
+  }
+  
+  utilsFanc::safelapply(clusters, function(cluster) {
+    id.df <- data.frame(gene.x = rownames(query[[cluster]]$bulk.mat))
+    id.df$id <- 1:nrow(id.df)
+    gr.q <- query[[cluster]][[slot]][, c("gene", col, other.cols)] %>% 
+      utilsFanc::loci.2.df(loci.col.name = "gene", remove.loci.col = F, return.gr = T)
+    summ <- query[[cluster]][[query.summ.slot]]
+    if (! query.summ.slot %in% names(query[[cluster]])) {
+      stop("! query.summ.slot %in% names(query[[cluster]])")
+    }
+    gr.q$type <- NA
+    for (type in c("up", "down")) {
+      gr.q$type[gr.q$gene %in% summ[[paste0(type, ".genes")]]] <- type
+    }
+    gr.q <- gr.q[!is.na(gr.q$type)]
+    if (length(gr.q) < 1) {
+      stop("length(gr.q) < 1")
+    }
+    gr.r <- ref[[cluster]][[slot]][, c("gene", col, other.cols)] %>% 
+      utilsFanc::loci.2.df(loci.col.name = "gene", remove.loci.col = F, return.gr = T)
+    
+    j <- plyranges::join_overlap_inner(gr.q, gr.r)
+    df <- mcols(j) %>% as.data.frame()
+    col.q <- paste0(col, ".x")
+    col.r <- paste0(col, ".y")
+    df$fc <- df[[col.q]]/df[[col.r]]
+    df$diff <- df[[col.q]] - df[[col.r]]
+    if (abs.diff) {
+      df$diff <- abs(df$diff)
+    }
+    dir.create(out.dir, showWarnings = F, recursive = T)
+    lapply(c("up", "down"), function(type) {
+      df <- df[df$type == type, ]
+      df <- left_join(df, id.df)
+      df <- utilsFanc::df.rearrange.cols(df = df ,cols = "id", pos = 1)
+      out.file <- paste0(out.dir, "/", root, "_", cluster, "_", query.name, "_vs_", ref.name,"_", slot, 
+                         "_", col, "_", query.summ.slot, "_", type, ".tsv")
+      write.table(df, out.file, quote = F, sep = "\t", col.names = T, row.names = F)
+      if (bScatter) {
+        out.plot <- sub(".tsv", if_else(use.plotly, ".html" ,".png"), out.file)
+        pl <- lapply(c(col, other.cols), function(v) {
+          colx <- paste0(v, ".x")
+          coly <- paste0(v, ".y")
+          if (bSimple) {
+            to.plot <- data.frame(x = colx, y = coly)
+          } else {
+            to.plot <- data.frame(x = c(colx, colx, coly),
+                                  y = c(coly, "diff", "diff"))
+          }
+          
+          pl <- lapply(1:nrow(to.plot), function(i) {
+            x <- to.plot[i, "x"]
+            y <- to.plot[i, "y"]
+            type.x <- sub(".[xy]$", "", x) 
+            type.y <- sub(".[xy]$", "", y) 
+            y.lim <- x.lim <- NULL
+            transformation.x <- transformation.y <- NULL
+            if (type.x == "baseMean") {
+              transformation.x <- log2
+            } else if (type.x == "pvalue") {
+              transformation.x <- function(x) return(-log10(x))
+              x.lim <- c(0, 25)
+            } else if (grepl("\\.\\.mean", type.x)){
+              transformation.x <- log2
+            } else if (!type.x %in% c("log2FoldChange", "diff")) {
+              stop(paste0("column ", type.x, " not recognized"))
+            }
+            
+            if (type.y == "baseMean") {
+              transformation.y <- log2
+            } else if (type.y == "pvalue") {
+              transformation.y <- function(y) return(-log10(y))
+              y.lim <- c(0, 25)
+            } else if (grepl("\\.\\.mean", type.y)){
+              transformation.y <- log2
+            } else if (!type.y %in% c("log2FoldChange", "diff")) {
+              stop(paste0("column ", type.y, " not recognized"))
+            }
+            df <- df[!is.na(df[, x]) & !is.na(df[, y]),]
+            p1 <- xy.plot(df, x = x, y = y, plotly.var = "id", plotly.label.all = T,
+                         transformation.x = transformation.x, transformation.y = transformation.y,
+                         color.density = color.density, add.abline = F)
+            if (!is.null(x.lim)) p1 <- p1 + xlim(x.lim)
+            if (!is.null(y.lim)) p1 <- p1 + ylim(y.lim)
+            if (add.trend)
+              p1 <- p1 + geom_smooth(show.legend = F)
+            
+            pl <- list(p1)
+            if (!use.plotly) {
+              p2 <- grid.sampler(df, x = x, y = y, 
+                                 transf.x = transformation.x, transf.y = transformation.y,
+                                 range.x = x.lim, range.y = y.lim, color.density = F, seed = 42,
+                                 out.dir = paste0(out.dir, "/grid_sampler/"), return.plot = T,
+                                 print.plot = F, add.abline = F, 
+                                 root.name = paste0(root, "_", cluster, "_", x, "_vs_", y))
+              pl <- c(pl, list(p2))  
+            }
+            
+            return(pl)
+          }) %>% do.call(c, .)
+          return(pl)
+        }) %>% do.call(c, .)
+        wrap.plots.fanc(plot.list = pl, plot.out = out.plot, n.col = min(6, length(pl)),
+                        sub.width = 6, sub.height = 6, tooltip = "id")
+      }
+    })
+    return()
+  }, threads = threads)
+}
+
+da.cmp.plot <- function(tsvs, fill.var, use.trend = F, brewer.palette = "Greens",
+                        plot.out, text.size = 20, width = 6, height = 4) {
+  if (is.null(names(tsvs))) {
+    stop("is.null(names(tsvs))")
+  }
+  df <- lapply(names(tsvs), function(name) {
+    df <- read.table(tsvs[[name]], header = T)
+    df <- df %>% dplyr::mutate(direction = if_else(!!as.name(fill.var) > 0, "up", "down"),
+                               name = name) %>% 
+      dplyr::select(name, direction) %>% 
+      dplyr::group_by(name, direction) %>% 
+      dplyr::summarise(n = n()) %>% as.data.frame()
+    if (use.trend) {
+      if (grepl("up.tsv$", tsvs[[name]])) {
+        trend <- "up"
+      } else if (grepl("down.tsv$", tsvs[[name]])) {
+        trend <- "down"
+      } else {
+        stop("couldn't find grepping patterns (up.tsv$ or down.tsv$)")
+      }
+      df$old.d <- df$direction
+      df$direction[df$old.d == trend] <- "same"
+      df$direction[df$old.d != trend] <- "oppo"
+    }
+    return(df)
+  }) %>% do.call(rbind, .)
+  df <- df %>% dplyr::group_by(name) %>% 
+    dplyr::mutate(frac = n/sum(n)) %>% as.data.frame()
+  df$name <- factor(df$name, levels = rev(unique(df$name)))
+  p <- ggplot(df, aes(x = name, y = frac, fill = direction)) + 
+    geom_bar(stat = "identity") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_brewer(palette = brewer.palette, direction = -1, type = "div") +
+    theme_classic() +
+    theme(text = element_text(size = text.size)) +
+    coord_flip()
+  wrap.plots.fanc(plot.list = list(p), sub.width = width, sub.height = height, plot.out = plot.out)
+  return(p)
+}
+
+## wrote for comparing the differential results from RNA or ATAC based clustering
+deseq2.cmp <- function(pbl.list, cmp.df, plot.out, summ.slot = "summary") {
+  # pbl.list <- list(x = de.seurat_clusters, y = de.clusters)
+  # cmp.df format: data.frame(x = c(paste0("seurat_clusters_", 6:7), 
+  #                           y = c(paste0("Clusters_C", 1:2)))
+  # note the names of pbl.list needs to match the names of cmp.df
+  utilsFanc::check.intersect(colnames(cmp.df), "colnames(cmp.df)",
+                             names(pbl.list), "names(pbl.list)")
+  lapply(colnames(cmp.df), function(pbl.name) {
+    pbl <- pbl.list[[pbl.name]]
+    utilsFanc::check.intersect(cmp.df[,pbl.name], paste0("cmp.df[,", pbl.name, "]"),
+                               names(pbl), "names(pbl.list[",pbl.name,"])")
+  })
+  x.list.list <- cmp.df %>% split(., f = 1:nrow(.)) %>% 
+    lapply(function(cmp) {
+      cmp.name <- unlist(cmp) %>% paste0(collapse = ":")
+      x.list.list <- lapply(c("up", "down"), function(direction) {
+        x.list <- lapply(colnames(cmp), function(pbl.name) {
+          pbl <- pbl.list[[pbl.name]]
+          s2b <- pbl[[cmp[, pbl.name]]]
+          if (is.null(s2b[[summ.slot]])) {
+            stop("is.null(s2b[[summ.slot]])")
+          }
+          genes <- s2b[[summ.slot]][[paste0(direction,".genes")]]
+          return(genes)
+        })
+        names(x.list) <- colnames(cmp)
+        return(x.list)
+      })
+      names(x.list.list) <- paste0(cmp.name, "_", c("up", "down"))
+      return(x.list.list)
+    }) %>% Reduce(c, .)
+  multi.venn(x.list.list = x.list.list, 
+             plot.titles.vec = names(x.list.list), use.upset = T, 
+             height.sub = 800, width.sub = 800,
+             out.file = plot.out)
+  return(x.list.list)
+}
+
+##
+
+de.add.mean <- function(pbl, slot = "res.exp", meta) {
+  pbl <- lapply(pbl, function(s2b) {
+    if (! meta %in% colnames(s2b$coldata))
+      stop("! meta %in% colnames(a2b$coldata)")
+    df.add <- s2b$coldata %>% split(., f = .[, meta]) %>% 
+      lapply(function(df) {
+        samples <- rownames(df)
+        res <- s2b[[slot]][, samples] %>% apply(1, mean)
+        return(res)
+      }) %>% as.data.frame()
+    colnames(df.add) <- paste0(colnames(df.add), "..mean")
+    s2b[[slot]] <- utilsFanc::add.column.fanc(s2b[[slot]], df.add)
+    return(s2b)
+  })
+  return(pbl)
+}
+
+
+de.get.joint.mat <- function(de.list) {
+  if (is.null(names(de.list))) {
+    stop("is.null(names(de.list))")
+  }
+  de.list <- lapply(names(de.list), function(name) {
+    de <- de.list[[name]]
+    de <- lapply(de, function(s2b) {
+      s2b$root.name <- paste0(s2b$root.name, "_", name)
+      return(s2b)
+    })
+    return(de)
+  })
+  
+  s2bs <- do.call(c, de.list)
+  genes <- lapply(s2bs, function(s2b) return(rownames(s2b$bulk.mat))) %>% 
+    unlist() %>% unique() %>% gtools::mixedsort()
+  
+  mat.j <- lapply(s2bs, function(s2b) {
+    mat <- s2b$bulk.mat
+    colnames(mat) <- paste0(s2b$root.name, "_", colnames(mat))
+    genes.not.in <- genes %>% .[!. %in% rownames(mat)]
+    mat.add <- matrix(NA, nrow = length(genes.not.in), ncol = ncol(mat))
+    rownames(mat.add) <- genes.not.in; colnames(mat.add) <- colnames(mat)
+    mat <- rbind(mat, mat.add)
+    mat <- mat[genes, ]
+  }) %>% do.call(cbind, .)
+  return(mat.j)
+}
+
+de.transfer.slot <- function(de.from, de.to, slot.from, slot.to, strict = T) {
+  if (!identical(sort(names(de.from)), sort(names(de.to)))) {
+    stop("!identical(sort(names(de.from)), sort(names(de.to)))")
+  }
+  de.to <- lapply(de.to, function(a2b) {
+    cluster <- a2b$root.name
+    a2b[[slot.to]] <- de.from[[cluster]][[slot.from]]
+    if (strict && "de.genes" %in% names(a2b[[slot.to]])) {
+      for (i in c("de", "up", "down")) {
+        slot.genes <- paste0(i, ".genes")
+        slot.n <- paste0("n.", i)
+        a2b[[slot.to]][[slot.genes]] <- a2b[[slot.to]][[slot.genes]] %>% .[. %in% a2b$res.exp$gene]
+        a2b[[slot.to]][[slot.n]] <- length(a2b[[slot.to]][[slot.genes]])
+      }
+    }
+    return(a2b)
+  })
+  return(de.to)
+}
+
+da.footprint <- function(da, slot = "summary", direction = c("up", "down"),
+                         ao, motif.pos = NULL, motif.mat.name,
+                         cluster.ident, type.ident, group.by = NULL,
+                         norms, smooth.win = 20,
+                         out.dir, root.name = "footprint") {
+  if (is.null(motif.pos)) {
+    motif.pos <- getPositions(ArchRProj = ao, name = motif.mat.name)
+  }
+  
+  motif.pos.l <- footprint.motif.dar(motifPos = motif.pos, da = da, slot = slot)
+  lapply(da, function(a2b) {
+    cluster <- sub(paste0("^", cluster.ident, "_"), "", a2b$root.name)
+    types <- getCellColData(aoi, c(cluster.ident, type.ident)) %>% as.data.frame() %>% 
+      dplyr::filter(!!as.name(cluster.ident) %in% cluster) %>% 
+      .[, type.ident] %>% unique() %>% gtools::mixedsort()
+    if (is.null(group.by)) {
+      group.by <- paste0(cluster.ident, "_", type.ident)
+    }
+    lapply(norms, function(norm) {
+      lapply(direction, function(direc) {
+        se.foot <- getFootprints(ArchRProj = ao, positions = motif.pos.l[[a2b$root.name]][[direc]],
+                                 groupBy = group.by, useGroups = paste0(cluster, "..", types))
+        plot.name <-  paste0(root.name, "_", a2b$root.name, "_", slot, "_", direction, "_", group.by, 
+                             "_norm", stringr::str_to_title(norm), "_win", smooth.win)
+        plotFootprints(
+          seFoot = se.foot,
+          ArchRProj = ao, 
+          normMethod = norm,
+          plotName = plot.name,
+          addDOC = FALSE,
+          smoothWindow = smooth.win
+        )
+        dir.create(out.dir, showWarnings = F, recursive = T)
+        system(paste0("mv ", getOutputDirectory(aoi), "/Plots/", plot.name, ".pdf ",
+                      out.dir, "/"))
+        return()
+      })
+      
+    })
+  })
+}
+
+de.write.xls <- function(de, cluster.alias = NULL,
+                         summ = "summary", slot = "res.exp",
+                         cols = c("log2FoldChange", "padj"),
+                         out.file) {
+  # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
+  system(paste0("rm -rf ", out.file))
+  dir.create(dirname(out.file), showWarnings = F, recursive = T)
+  lapply(de, function(s2b) {
+    if (!is.null(cluster.alias)) {
+      cluster <- cluster.alias %>% dplyr::filter(name == s2b$root.name) %>% 
+        dplyr::pull(alias)
+      if (length(cluster) != 1) {
+        stop("length(cluster) != 1")
+      }
+    } else {
+      cluster <- s2b$root.name
+    }
+    df <- s2b[[slot]][, c("gene", cols)]
+    lapply(c("down", "up"), function(direction) {
+      genes <- s2b[[summ]][[paste0(direction, ".genes")]]
+      df <- df %>% dplyr::filter(gene %in% genes) %>% 
+        dplyr::arrange(padj)
+      sheet <- paste0(cluster, "_", direction)
+      if (grepl(":", df$gene[1])) {
+        colnames(df)[1] <- "peak"
+      }
+      xlsx::write.xlsx(x = df, file = out.file, sheetName = sheet, 
+                       append = T, row.names = F, col.names = T)
+      return()
+    })
+  })
+}
+
+de.plot.bar <- function(de, genes, Ly49.strip = T,
+                        clusters = NULL, 
+                        group.by, shape.by = NULL, 
+                        pt.size = 0.2, text.size = 6,
+                        width = NULL, height = 1,
+                        plot.out = NULL, return.df = F) {
+  if (is.null(clusters)) {
+    clusters <- names(de)
+  }
+  de <- de[names(de) %in% clusters]
+  if (length(de) < 1) {
+    stop("none of the clusters in de is in the 'clusters' parameter specified")
+  }
+  pl <- lapply(de, function(s2b) {
+    cluster <- s2b$root.name
+    df <- s2b$bulkNorm %>% dplyr::filter(gene %in% genes)
+    if (nrow(df) < 1) {
+      stop(paste0("none of the genes were found in the matrix of cluster: ", cluster))
+    }
+    
+    df <- df %>% reshape2::melt(id.vars = "gene", variable.name = "sample", value.name = "expr")
+    df <- dplyr::left_join(df, s2b$coldata)
+    suppressMessages(library(ggpubr))
+    if (Ly49.strip) {
+      df$gene <- sub(".*Ly49", "", df$gene)
+    }
+    if (return.df) {
+      return(df)
+    }
+    p <- ggbarplot(data = df, x = "gene", y = "expr",
+                   fill = group.by, position = position_dodge(width = 0.75),
+              color = "black", alpha = 0.5, add = "mean_sd", 
+              add.params = list(size = 0.2), size = 0.2) +
+      geom_point(aes_string(fill = group.by, shape = shape.by), 
+                 position = position_jitterdodge(
+                   dodge.width = 0.8, jitter.width = 0.25, jitter.height = 0),
+                 size = pt.size, color = "grey25") + 
+      theme_classic() +
+      theme(text = element_text(size = text.size, family = "Arial", color = "black"),
+            # legend.position = "none",
+            legend.position = "bottom",
+            legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+            legend.box.margin = margin(t = -0.12, r = -0.1, b = 0, l = -0.1, unit = "in"),
+            legend.background = element_blank(),
+            legend.spacing = unit(0.02, "in"),
+            legend.key.size = unit(0.05, "in"),
+            legend.box = "vertical",
+            legend.title = element_text(size = text.size, family = "Arial"),
+            axis.title = element_blank(),
+            axis.text.x = element_text(
+              face = "italic", size = text.size, family = "Arial", color = "black"),
+            axis.text.y = element_text(
+              size = text.size, family = "Arial", color = "black"),
+            axis.line.x.bottom = element_line(size = 0.2),
+            axis.line.y.left = element_line(size = 0.2),
+            axis.ticks = element_line(size = 0.2),
+            axis.ticks.length = unit(0.02, "in"),
+            plot.margin = unit(c(0, 0.04, 0.01, 0), units = "in")) +
+      guides(fill = guide_legend(order=1),
+             shape = guide_legend(order=2))
+    # ggsave("~/test/test.png", p, width = 25, height = 4, dpi = 100)
+    return(p)
+  })
+  if (return.df) {
+    if (length(pl) == 1) {
+      pl <- pl[[1]]
+    }
+    return(pl)
+  }
+  if (is.null(width)) {
+    n.genes <- sapply(de, function(s2b) {
+      return(length(intersect(genes, s2b$bulkNorm$gene)))
+    }) %>% max()
+    width <- floor(n.genes / 4)
+  }
+  if (length(pl) == 1) {
+    p <- pl[[1]]
+    dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+    device <- NULL
+    if (grep("pdf$", plot.out)) {
+      device <- cairo_pdf
+    }
+    ggsave(plot.out, p, height = height, width = width, dpi= 300, device = device)
+  } else {
+    p <- wrap.plots.fanc(plot.list = pl, sub.height = height, sub.width = width,
+                         plot.out = plot.out)
+  }
+  invisible(p)
+}
+
+da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
+                                bViolin = F, bDot = F,
+                                slot = "res.exp", comps, 
+                                # motif.gr.list,
+                                motif.min.score = NULL,
+                                n.levels = 5, level.fun = "max", bLog.fc = T,
+                                violin.ceiling = 5, violin.floor = -5,
+                                dot.n.label = 5,
+                                height = 4, width = 4.5, n.col = 1,
+                                write.df = F, write.each.df = F, 
+                                # threads.motif = 1,
+                                plot.dir, root.name) {
+  # motif.gr.list: the same format as the motifPositions you will get from ArchR::getPositions()
+  # warning("this function calculates fold changes de novo based on normalized counts,
+  #         unless 'beta' is comp")
+  if (!is.null(motif.min.score)) {
+    root.name <- paste0(root.name, "_score", motif.min.score)
+  }
+  if (bLog.fc) {
+    value <- "log2FoldChange"
+  } else {
+    stop("only bLog.fc = T has been developed")
+  }
+  
+  if (is.character(peak.motif.df)) {
+    peak.motif.df <- readRDS(peak.motif.df)
+  }
+  df <- lapply(da, function(a2b) {
+    # establish peak-motif association
+    peak.by.motif <- peak.motif.df %>% dplyr::filter(gene %in% a2b[[slot]]$gene)
+    if (!is.null(motifs.use))
+      peak.by.motif <- peak.by.motif %>% dplyr::filter(motif %in% motifs.use)
+    if (!is.null(motif.min.score)) {
+      peak.by.motif <- peak.by.motif %>% dplyr::filter(score >= motif.min.score)
+    }
+    # peak.by.motif <- utilsFanc::safelapply(names(motif.gr.list), function(motif.name) {
+    #   motif.gr <- motif.gr.list[[motif.name]]
+    #   # mcols(motif.gr) <- mcols(motif.gr)[, "score", drop = F]
+    #   if (!is.null(motif.min.score)) {
+    #     motif.gr <- motif.gr[motif.gr$score >= motif.min.score]
+    #   }
+    #   gr <- a2b[[slot]]$gene %>% utilsFanc::loci.2.gr()
+    #   gr <- gr %>% subsetByOverlaps(motif.gr)
+    #   df <- data.frame(gene = utilsFanc::gr.get.loci(gr), motif = motif.name)
+    #   return(df)
+    # }, threads = threads.motif) %>% do.call(rbind, .)
+    df <- lapply(comps, function(comp) {
+      if (comp == "beta") {
+        if (level.fun == "max") {
+          max.df <- data.frame(gene = a2b$bulkNorm$gene,
+                               max = rowMax(as.matrix(a2b$bulkNorm[, colnames(a2b$bulkNorm) != "gene"])))
+        } else {
+          stop("level.fun: only max has been developed")
+        }
+          
+        df <- left_join(peak.by.motif, a2b[[slot]][,c("gene", "log2FoldChange")])
+        df <- left_join(df, max.df)
+      } else {
+        x <- comp %>% sub("^.+:", "", .)
+        y <- comp %>% sub(":.+$", "", .)
+        log2fc <- log2((a2b[[slot]][, y] + 1)/(a2b[[slot]][, x] + 1))
+        df <- left_join(peak.by.motif, data.frame(gene = a2b[[slot]]$gene, log2FoldChange = log2fc))
+        if (level.fun == "max") {
+          max.df <- data.frame(gene = a2b$bulkNorm$gene,
+                               max = rowMax(as.matrix(a2b$bulkNorm[, c(x, y)])))
+        } else {
+          stop("level.fun: only max has been developed")
+        }
+        df <- left_join(df, max.df)
+      }
+      # divide into levels by quantile:
+      df$level <- gtools::quantcut(df[, level.fun], n.levels)
+      df$level_id <- df$level %>% as.integer()
+      if (write.each.df) {
+        dir.create(paste0(plot.dir, "/source/"), showWarnings = F, recursive = T)
+        out.Rds <- paste0(plot.dir, "/source/", root.name, "_", a2b$root.name, "_", comp, ".Rds")
+        saveRDS(df, out.Rds)
+      }
+
+      df$comp <- comp
+      return(df)
+    }) %>% do.call(rbind, .)
+    df$cluster <- a2b$root.name
+    return(df)
+  }) %>% do.call(rbind, .)
+  
+  if (write.df) {
+    dir.create(plot.dir, showWarnings = F, recursive = T)
+    saveRDS(df, paste0(plot.dir, "/", root.name, ".Rds"))
+  }
+  
+  # tsv files are too huge
+  # write.table(df, paste0(plot.dir, "/", root.name, ".tsv"),
+  #             sep = "\t", col.names = T, row.names = F, quote = F)
+  # violin plot:
+  if (bViolin) {
+    pl.violin <- df %>% split(., f = .$cluster) %>% lapply(function(df.cluster) {
+      df.cluster %>% split(., f=.$comp) %>% 
+        lapply(function(df) {
+          if (length(unique(df$motif)) > 4) {
+            stop("violin shouldn't be used for more than 4 motifs")
+          }
+          df$level <- droplevels(df$level)
+          df[, value][df[, value] > violin.ceiling] <- violin.ceiling
+          df[, value][df[, value] < violin.floor] <- violin.floor
+          p <- ggplot(df, aes_string(x = "level", y = value, fill = "motif")) + 
+            geom_violin() + 
+            ggtitle(paste0(df$cluster[1], "  ", df$comp[1])) +
+            theme(plot.title = element_text(size=8))
+          return(p)
+        })
+    }) %>% Reduce(c, .)
+    wrap.plots.fanc(plot.list = pl.violin, plot.out = paste0(plot.dir, "/", root.name, "_violin.png"),
+                    sub.width = width, sub.height = height, n.col = n.col)  
+  }
+  
+  if(bDot) {
+    pl.dot <- df %>% split(., f = .$cluster) %>% lapply(function(df.cluster) {
+      df.cluster %>% split(., f=.$comp) %>% 
+        lapply(function(df) {
+          df.sum <- df %>% dplyr::group_by(motif, level_id) %>% 
+            dplyr::summarise(median = median(!!as.name(value))) %>% 
+            dplyr::ungroup() %>% 
+            dplyr::mutate(rank = rank(median, ties.method = "random"),
+                          motif_level = paste0(motif, "_L", level_id)) %>% 
+            as.data.frame()
+            
+          if (write.each.df) {
+            dir.create(paste0(plot.dir, "/source/"), showWarnings = F,recursive = T)
+            write.table(df.sum, paste0(plot.dir, "/source/", root.name, "_", 
+                                       df$cluster[1], "_", df$comp[1], "_median.tsv"),
+                        sep = "\t", col.names = T, row.names = F, quote = F)
+          }
+          
+          if (nrow(df.sum) <= 2 * dot.n.label) {
+            motifs.label <- df.sum$motif_level
+          } else {
+            motifs.label <- df.sum$motif_level[df.sum$rank %in% c(1:dot.n.label, (max(df.sum$rank) - 0:(dot.n.label - 1)))]
+          }
+          p <- xy.plot(df = df.sum, x = "rank", y = "median", pt.size = 0.2,
+                       label.var = "motif_level", label.values = motifs.label, use.repel = T, text.size = 2,
+                       add.abline = F, highlight.var = "motif_level", highlight.values = motifs.label, 
+                       plotly.var = "motif_level", plotly.label.all = T, 
+                       title = paste0(df$cluster[1], "  ", df$comp[1])) +
+            theme(plot.title = element_text(size=8))
+          return(p)
+        })
+    }) %>% Reduce(c, .)
+    lapply(c("png", "html"), function(dev) {
+      wrap.plots.fanc(plot.list = pl.dot, plot.out = paste0(plot.dir, "/", root.name, "_dot.", dev),
+                      sub.width = width, sub.height = height, n.col = NULL, n.split = length(comps),
+                      tooltip = "text")  
+    })
+    
+  }
+  invisible(df)
+}
+
+de.plot.bar.2 <- function(de, genes, cluster, color.by, color.levels = NULL,
+                          shape.by = NULL,
+                          wrap.n = NULL,
+                          plot.out) {
+  if (is.null(wrap.n)) {
+    f <- rep(1, length(genes))
+  } else {
+    f <- ceiling((1:length(genes))/wrap.n)
+  }
+  pl <- genes %>% split(., f = f) %>% 
+    lapply(function(genes) {
+      bar.df <- de.plot.bar(de = de, genes = genes, clusters = cluster, return.df = T)
+      if (!is.null(color.levels)) {
+        bar.df[, color.by] <- factor(bar.df[, color.by], levels = color.levels)
+      }
+      n.genes <- bar.df$gene %>% unique() %>% length()
+      dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+      p <- utilsFanc::barplot.pub.3(df = bar.df, x = "gene", y = "expr", 
+                                    color.by = color.by, 
+                                    shape.by = shape.by,
+                                    pt.size = 0.8,
+                                    spread.bin.size = 100,
+                                    bar.width = 0.6, dodge.width = 0.8, spread.width = 0.3) %>%
+        utilsFanc::theme.fc.1()
+      return(p)
+    })
+  if (length(pl) > 1) {
+    p <- wrap.plots.fanc(pl, n.col = 1)
+  } else {
+    p <- pl[[1]]
+  }
+  ggsave(plot.out, p, device = cairo_pdf,
+         width = 0.5 * length(genes), height = 3 * length(unique(f)))
+  
+  invisible(p)
+}
+
+de.ggVenn <- function(de.1, de.2, name.1, name.2, 
+                      slot = "summary", plot.out = NULL) {
+  clusters <- intersect(names(de.1), names(de.2))
+  if (length(clusters) < 1) {
+    stop(length(clusters) < 1)
+  }
+  de.1 <- de.1[clusters]
+  de.2 <- de.2[clusters]
+  pl <- lapply(clusters, function(cluster) {
+    pl <- lapply(c("up", "down"), function(type) {
+      del <- list(de.1, de.2)
+      names(del) <- c(name.1, name.2)
+      gl <- lapply(del, function(de) {
+        genes <- de[[cluster]][[slot]][[paste0(type, ".genes")]]
+        if (is.null(genes)) {
+          stop(paste0("is.null(de$",cluster,"$",slot, "$", type, ".genes)"))
+        }
+        return(genes)
+      })
+      names(gl) <- paste0(names(gl), "_", type)
+      p <- ggVennDiagram::ggVennDiagram(gl, set_size = 3) +
+        scale_fill_gradient(low="#2297E6", high = "#F5C710") +
+        ggtitle(paste0(cluster, " ", type))
+      return(p)
+    })
+    return(pl)
+  }) %>% Reduce(c, .)
+  p <- wrap.plots.fanc(plot.list = pl, n.split = 2, plot.out = plot.out)
+  invisible(p)
 }

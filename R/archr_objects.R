@@ -17,6 +17,12 @@ chr.sort2mixsort <- function(x) {
   return(order)
   
 }
+archr.get.frag.2 <- function(obj, cell.list, bCount.only = F, threads = 1) {
+  # written on 2022-08-17
+  # supposed to be a simplified + paralleled version of archr.get.frag()
+  # didn't finish writing...
+  
+}
 archr.get.frag <- function(obj, cellNames, n.frag = NULL, seed = 42,  return.df = F, out.bed = NULL,
                            out.bdg = NULL, ext.left = 75, ext.right = 75,
                            return.grange = F, ...) {
@@ -327,8 +333,10 @@ fake.so.gen.2 <- function(cells = NULL, n.gene = 5, meta.data = NULL) {
 }
 
 
-seurat.plot.archr <- function(so, ao, ao.embedding, ao.name, plot.dir, root.name = "ao",
-                              label = T, pt.size = 0.5, 
+seurat.plot.archr <- function(so, ao, ao.embedding, 
+                              ao.name, use.levels = NULL, 
+                              plot.dir = NULL, root.name = "ao",
+                              label = T, pt.size = 0.5, cols = NULL,
                               width = 10, height = 10, ...) {
   
   embedding <- ArchR::getEmbedding(ArchRProj = ao, embedding = ao.embedding, returnDF = T)
@@ -350,11 +358,20 @@ seurat.plot.archr <- function(so, ao, ao.embedding, ao.name, plot.dir, root.name
                                          assay = DefaultAssay(fake.so))
   
   fake.so[[ao.name]] <- ArchR::getCellColData(ArchRProj = ao, select = ao.name, drop = T)
-  
-  dir.create(plot.dir, showWarnings = F,recursive = T)
-  DimPlot(fake.so, reduction = "pseudo",group.by = ao.name, pt.size = pt.size, label = label, label.size = 10, ...) + 
-    ggsave(paste0(plot.dir, "/",root.name,"_", ao.embedding, "_", ao.name, ".png"), 
+  if (!is.null(use.levels)) {
+    fake.so@meta.data[[ao.name]] <- factor(fake.so@meta.data[[ao.name]], levels = use.levels)
+    cols <- utilsFanc::gg.color.keeplevel(fac.vec = fake.so@meta.data[[ao.name]])
+  }
+  p <- DimPlot(fake.so, reduction = "pseudo",group.by = ao.name,
+          pt.size = pt.size, label = label, cols = cols,
+          ...) 
+  if (!is.null(plot.dir))  {
+    dir.create(plot.dir, showWarnings = F,recursive = T)
+    ggsave(paste0(plot.dir, "/",root.name,"_", ao.embedding, "_", ao.name, ".png"), p, 
            device = "png", width = width, height = height, dpi = 200, units = "in")
+  }
+  
+  return(p)
 } 
 
 
@@ -415,9 +432,30 @@ archr.get.cells.grid <- function(ao, cluster.ident, clusters=NULL, group.ident, 
   # fg can only be one sample. This is determined by ArchR
   # filter.limits: length of 2. lower and upper bound. bQuantileFilter indicate if they are
   #quantiles
+  print("using archr.get.cells.grid. A similar function is get.cell.list()")
   df <- ArchR::getCellColData(ao,drop = F, select = c(cluster.ident, group.ident, filter.by)) %>% 
     as.data.frame() %>%  factor2character.fanc() 
   df <- df %>% na.omit()
+  
+  if (length(group.ident) > 1) {
+    df$mult <- Reduce(function(x,y) paste(x, y, sep = ".."),
+                      df[, group.ident] %>% as.list())
+    if (!is.null(groups)) {
+      if (!is.list(groups) || length(groups) != length(group.ident)) {
+        stop("when length(group.ident) > 1 and !is.null(groups), groups must be a list, each element corresponding to group.ident")
+      }
+      groups <- lapply(seq_along(groups), function(i) {
+        x <- groups[[i]]
+        if (is.null(x)) {
+          x <- df[, group.ident[i]] %>% unique() %>% .[!is.na(.)]
+        }
+        return(x)
+      })
+      groups <- Reduce(function(x, y) outer(x, y, FUN = function(x, y) paste(x,y, sep = "..")),
+                       groups) %>% as.character()
+    }
+    group.ident <- "mult"
+  }
   if (!is.null(clusters))
     df <- df[df[, cluster.ident] %in% clusters,]
   if (!is.null(groups))
@@ -726,7 +764,12 @@ archr.add.seurat <- function(ao, so, meta = "seurat_clusters", as.factor = F) {
   }
   return(ao)
 }
-
+archr.add.seurat.m <- function(ao, so, metas = "seurat_clusters", as.factor = F) {
+  for (meta in metas) {
+    ao <- archr.add.seurat(ao = ao, so = so, meta = meta, as.factor = as.factor)
+  }
+  return(ao)
+}
 
 so.2.se <- function(so, assay, archr.names) {
   se <- Seurat::as.SingleCellExperiment(x = so, assay = assay)
@@ -1256,3 +1299,109 @@ get.named.coldata <- function(ao, col, na.rm = F) {
     res <- res %>% .[!is.na(.)]
   return(res)
 }
+
+archr.find.closest.cells <- function(cell.list, ao,
+                                     n.bg.each,
+                                     per.sample = T,
+                                     plot.dir = NULL, root.name) {
+  if (!is.list(cell.list)) {
+    vec.flag <- T
+    cell.list <- list(cell.list)
+  } else {
+    vec.flag <- F
+  }
+  if (is.null(names(cell.list)))
+    names(cell.list) <- paste0("cells_", 1:length(cell.list))
+  res.list <- lapply(names(cell.list), function(name) {
+    cells <- cell.list[[name]]
+    utilsFanc::check.intersect(x = cells, x.name = paste0("cells in ", name),
+                               y = ao$cellNames, y.name = "cells in ao")
+    df <- ao@embeddings$UMAP$df
+    if (per.sample == T) {
+      cells.by.sample <- cells %>% split(., f = sub("#.+$", "", .))
+      df.by.sample <- df %>% split(., f = sub("#.+$", "", rownames(.)))
+      res <- lapply(names(cells.by.sample), function(sample) {
+        cells <- cells.by.sample[[sample]]
+        df <- df.by.sample[[sample]]
+        res <- bg.gen.2(mat = df, fg.vec = cells, n.bg.each = n.bg.each, no.replace = T, 
+                        method = "euclidean", scale = "none")
+        return(res)
+      }) %>% unlist()
+    } else {
+      stop("only support per.sample matching so far")
+    }
+    ao$tmp <- NA
+    ao$tmp[ao$cellNames %in% cells] <- "fg"
+    ao$tmp[ao$cellNames %in% res] <- "bg"
+    if (!is.null(plot.dir)) {
+      plot.panel.list(panel.list = "tmp", ao, order = T, assay = "RNA", binarize.panel = T,
+                      split.by = "sample", invisible = T,
+                      plot.out = paste0(plot.dir, "/", root.name, "_", name, ".png"))
+    }
+    return(res)
+  })
+  names(res.list) <- names(cell.list)
+  if (length(res.list) == 1) {
+    res.list <- unlist(res.list)
+  } 
+  if (!is.null(plot.dir)) {
+    saveRDS(res.list, paste0(plot.dir, "/", root.name, ".Rds"))
+  }
+  return(res.list)
+}
+
+
+footprint.motif.dar <- function(motifPos, da, slot = "summary") {
+  res <- lapply(da, function(a2b) {
+    res <- lapply(c("up", "down"), function(type) {
+      dars <- a2b[[slot]][[paste0(type, ".genes")]] %>% 
+        utilsFanc::loci.2.gr()
+      pos <- lapply(motifPos, function(motifs.all) {
+        strand(motifs.all) <- "*"
+        motifs.sub <- subsetByOverlaps(motifs.all, dars)
+        return(motifs.sub)
+      })
+      return(pos)
+    })
+    names(res) <- c("up", "down")
+    return(res)
+  })
+  return(res)
+}
+
+archr.peak.motif.df.gen <- function(motif.gr.list, peaks = NULL, aoi,
+                                    threads = 12, out.rds) {
+  if (missing(out.rds)) {
+    stop("missing(out.rds)")
+  }
+  if (!is.null(peaks)) {
+    if (is.character(peaks)) {
+      peaks <- utilsFanc::loci.2.gr(peaks)
+    }
+  } else {
+    peaks <- getPeakSet(aoi)
+  }
+  mcols(peaks) <- NULL
+  names(peaks) <- NULL
+  strand(peaks) <- "*"
+  df <- utilsFanc::safelapply(names(motif.gr.list), function(motif.name) {
+    motif.gr <- motif.gr.list[[motif.name]]
+    if (is.null(motif.gr$score)) {
+      stop("the 'score' column must be present in motif.gr")
+    }
+    
+    gr <- peaks %>% plyranges::join_overlap_inner(motif.gr)
+    df <- data.frame(gene = utilsFanc::gr.get.loci(gr = gr),
+                     motif = motif.name, score = gr$score)
+    return(df)
+  }, threads = threads) %>% do.call(rbind, .)
+  df <- df %>% dplyr::group_by(gene, motif) %>% 
+    dplyr::summarise(score = max(score), n.motif = n()) %>% 
+    dplyr::ungroup() %>% 
+    as.data.frame()
+  rownames(df) <- NULL
+  dir.create(dirname(out.rds), showWarnings = F, recursive = T)
+  saveRDS(df, out.rds)
+  invisible(df)
+}
+
