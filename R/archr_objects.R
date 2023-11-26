@@ -1030,6 +1030,18 @@ seurat.add.archr.embed <- function(so, ao, ao.embedding, embedding.name = NULL) 
   return(so)
 }
 
+seurat.add.embed <- function(so, embed.df, embedding.name) {
+  # embed.df: rownames of embed.df is taken as the cell names.
+  # the first 2 columns are taken as the UMAP coordinates.
+  # a matrix is also okay
+  warning("this is a fast function that might not be the most reliable")
+  embed.df <- embed.df[rownames(embed.df) %in% colnames(so), 1:2]
+  so[[embedding.name]] <- CreateDimReducObject(embeddings = as.matrix(embed.df),
+                                               key = paste0(embedding.name , "_"),
+                                               assay = DefaultAssay(so))
+  return(so)
+}
+
 .saveUWOT.fanc <- function(model, file){
   file <- file.path(normalizePath(dirname(file)), basename(file))
   wd <- getwd()
@@ -1403,5 +1415,44 @@ archr.peak.motif.df.gen <- function(motif.gr.list, peaks = NULL, aoi,
   dir.create(dirname(out.rds), showWarnings = F, recursive = T)
   saveRDS(df, out.rds)
   invisible(df)
+}
+
+archr.gene.motif.df.gen <- function(promoters.gr,
+                                    peak.motif.df, motifs.use = NULL, motif.min.score  = NULL,
+                                    method = "distance", distance.1side = 50000) {
+  # promoter.gr: requires the "gene" column for gene names
+  utilsFanc::check.intersect(c("gene"), "required fields",
+                             colnames(mcols(promoters.gr)), "colnames(mcols(promoters.gr))")
+  utilsFanc::check.intersect(c("gene", "motif", "score"), "required fields",
+                             colnames(peak.motif.df), "colnames(peak.motif.df)")
+  
+  if (!is.null(motifs.use)) {
+    peak.motif.df <- peak.motif.df %>% dplyr::filter(motif %in% motifs.use)
+  }
+  if (!is.null(motif.min.score)) {
+    peak.motif.df <- peak.motif.df %>% dplyr::filter(score >= motif.min.score)
+  }
+  motifs <- peak.motif.df$motif %>% unique()
+  if (nrow(peak.motif.df) < 1) {
+    stop("nrow(peak.motif.df) < 1")
+  }
+  colnames(peak.motif.df)[colnames(peak.motif.df) == "gene"] <- "peak"
+  
+  peak.motif.gr <- utilsFanc::loci.2.df(
+    df = peak.motif.df, loci.col.name = "peak", remove.loci.col = F, return.gr = T)
+  
+  if (method == "distance") {
+    promoters.gr <- resize(promoters.gr, width = 2 * distance.1side, fix = "center")
+    df <- plyranges::join_overlap_left(promoters.gr, peak.motif.gr) %>% 
+      as.data.frame() %>% dplyr::select(gene, motif, peak) %>% unique() %>% na.omit()
+    df <- df %>% dplyr::group_by(gene, motif) %>% 
+      dplyr::summarise(n = n(), peak = paste0(peak, collapse = ",")) %>% 
+      as.data.frame()
+    attr(df, "distance.1side") <- 50000
+  }
+  attr(df, "method") <- method
+  attr(df, "motifs.use") <- motifs
+  attr(df, "motif.min.score") <- ifelse(is.null(motif.min.score), "not specified", motif.min.score)
+  return(df)
 }
 

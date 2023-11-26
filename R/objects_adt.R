@@ -1,5 +1,5 @@
-adt.norm <- function(so, assay, slot, plot.out = NULL) {
-  so <- NormalizeData(object = so, assay = assay)
+adt.norm <- function(so, assay, slot, norm.method, plot.out = NULL) {
+  so <- NormalizeData(object = so, assay = assay, normalization.method = norm.method)
   if (slot == "scale.data") {
     so <- Seurat::ScaleData(so, assay = assay)
   }

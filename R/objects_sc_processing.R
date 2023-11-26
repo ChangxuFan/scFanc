@@ -366,9 +366,9 @@ sct.int.pipe <- function(sol, n.int.features, n.threads, outfile= NULL, referenc
 
 cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
                          vars.to.regress = NULL,
-                         pc.run = 60, pc.dim, 
+                         pc.run = 60, pc.dim = 1:30, 
                          run.pca = T,
-                         cluster.resolution, cluster.seed = 0, umap.seed = 42,
+                         cluster.resolution = 0.7, cluster.seed = 0, umap.seed = 42,
                          work.dir, plot.dir,
                          project.name ,
                          metas.include = NULL,
@@ -392,8 +392,12 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
     } 
     
     if (assay == "integrated") {
-      if (is.sct.int == F)
+      if (is.sct.int == F) {
         soi <- ScaleData(object = soi, assay = "integrated")
+      } else {
+        print("is.sct.int set to TRUE. Skipping ScaleData()")
+      }
+        
     } else if (!grepl("^SCT", assay)) {
       soi <- NormalizeData(object = soi, normalization.method = "LogNormalize", assay = assay)
       soi <- FindVariableFeatures(soi, assay = assay)

@@ -232,7 +232,7 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
                             polygon.df = NULL,
                             ao.embedding = "UMAP",
                             invisible = F,
-                            publication = F,
+                            publication = F, 
                             threads = 1, ...) {
 
   if (is.motif == T) {
@@ -380,12 +380,24 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
           })
 
           if (publication == T) {
+            # if (publication.w.coordinates == T) {
+            #   psi <- suppressMessages(psi + theme(
+            #     axis.title.x = element_text(size = 8, face = "bold"),
+            #     axis.title.y = element_text(size = 8, face = "bold"),
+            #     axis.ticks=element_blank(),
+            #     axis.text = element_blank(),
+            #     axis.line = element_line(size = 0.1, colour = "grey50"),
+            #     aspect.ratio = 1
+            #   ))
+            # } else {
+            # 
+            # }
             psi <- suppressMessages(psi + theme(
-              axis.title.x = element_text(size = 8, face = "bold"),
-              axis.title.y = element_text(size = 8, face = "bold"),
+              axis.title.x = element_blank(),
+              axis.title.y = element_blank(),
               axis.ticks=element_blank(),
               axis.text = element_blank(),
-              axis.line = element_line(size = 0.1, colour = "grey50"),
+              axis.line = element_blank(),
               aspect.ratio = 1
             ))
           } else {
@@ -595,10 +607,10 @@ slice.top.features <- function(x, start, end) {
   } else stop("has to be a list")
 }
 
-hmtp.common.markers <- function(obj, plot.dir, threads = NULL, to.human = F, assay = "RNA",
+hmtp.common.markers <- function(obj, plot.dir, threads = 1, to.human = F, assay = "RNA",
                                 panels.to.plot = NULL, ...) {
   if (is.null(threads))
-    threads <- 6
+    threads <- 1
   panel.list <- readRDS("~/R_packages/scFanc/hmtp_panel.list.Rds")
   if (to.human == T) {
     t.f.upper <- function(x) {
@@ -612,15 +624,15 @@ hmtp.common.markers <- function(obj, plot.dir, threads = NULL, to.human = F, ass
     }
     panel.list <- t.f.upper(panel.list)
   }
-  mclapply(seq_along(panel.list), function(i) {
+  utilsFanc::safelapply(seq_along(panel.list), function(i) {
     panel.name <- names(panel.list)[[i]]
     if (!is.null(panels.to.plot) && !panel.name %in% panels.to.plot)
       return()
     name <- paste0(names(panel.list)[[i]], "_panel.png")
-    try(plot.panel.list.2(panel.list[[i]], obj = obj, assay = assay,
+    try(plot.panel.list.2(panel.list[[i]], obj = obj, assay = assay, to.human = to.human,
                           plot.out = paste0(plot.dir, "/", name), ...))
     return()
-  }, mc.cores = threads, mc.cleanup = T)
+  }, threads = threads)
 
   # try(plot.panel.list.2(panel.list[["general"]], obj = obj, assay = "RNA",
   #                   plot.out = paste0(plot.dir, "/panel.png")))
@@ -858,7 +870,8 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
                     highlight.var=NULL, highlight.values=NULL, highlight.color.var = NULL,
                     show.highlight.color.var = F, highlight.ptsize = NULL,
                     highlight.only = F,
-                    label.var = NULL, label.values = NULL, italic.label = F, use.repel = F, hjust = 0, vjust = 0,
+                    label.var = NULL, label.values = NULL, italic.label = F, 
+                    use.repel = F, hjust = 0, vjust = 0, repel.direction = "both",
                     nudge_x = 0, nudge_y = 0, text.size = 5, text.color = "midnightblue", use.geom_text = F,
                     plotly.var = NULL, plotly.label.all = F,
                     add.corr=F, add.highlight.corr = F,
@@ -968,7 +981,8 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
 
 
   if (add.abline ==T ) {
-    p <- p + geom_abline(slope = 1, intercept = 0, color = "blue", size = 2*pt.size)
+    p <- p + geom_abline(slope = 1, intercept = 0, color = "blue", size = 0.1)
+    # updated 2023-03-17: size used to be 2*pt.size
   }
   p <- p +
     theme_classic()
@@ -1030,8 +1044,9 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
                                         mapping = aes_string(x = x, y = y, label = label.var,
                                                              hjust = "hjust", vjust = "vjust"),
                                         size = text.size, color = text.color, parse = italic.label,
+                                        segment.size = 0.2, direction = repel.direction,
                                         min.segment.length = 0)
-    } else  if (use.geom_text == F) {
+    } else if (use.geom_text == F) {
       p <- p + geom_label(data = label.df, mapping = aes_string(x = x, y=y, label = label.var,
                                                                 hjust = "hjust", vjust = "vjust"),
                           nudge_x = nudge_x, nudge_y = nudge_y, size = text.size, color = text.color,
@@ -1543,5 +1558,273 @@ rank.plot.synced <- function(df, rank.by = NULL, bDescending = T,
   })
   p <- wrap.plots.fanc(plot.list = pl, sub.width = width,
                        sub.height = height, plot.out = plot.out, n.col = n.col)
+  invisible(p)
+}
+
+
+umap.axis.schema <- function(p, x.slot = "UMAP_1", y.slot = "UMAP_2",
+                             x.shift.pct = 0.08, y.shift.pct = 0.08, 
+                             x.length.pct = 0.3, y.length.pct = 0.3,
+                             line.size = 0.2, 
+                             # x.text.nudge = 0, y.text.nudge = 0.2,
+                             text.size = 2) {
+  x.range <- c(min(p$data[[x.slot]]), max(p$data[[x.slot]]))
+  x.len <- x.range[2] - x.range[1]
+  y.range <- c(min(p$data[[y.slot]]), max(p$data[[y.slot]]))
+  y.len <- y.range[2] - y.range[1]
+  
+  d <- data.frame(x = c(x.range[1], x.range[1] + x.shift.pct * x.len), 
+                  y = c(y.range[1] + y.shift.pct * y.len, y.range[1]),
+                  xend = c(x.range[1] + x.length.pct * x.len, x.range[1] + x.shift.pct * x.len), 
+                  yend = c(y.range[1] + y.shift.pct * y.len, y.range[1] + y.length.pct * y.len))
+  
+  p <- p + geom_segment(data = d, aes(x = x, y = y, xend = xend, yend = yend),
+                        inherit.aes = F,
+                        size = line.size)
+  dt <- data.frame(x = c(x.range[1] + (x.shift.pct + 0.05) * x.len, x.range[1]), 
+                  y = c(y.range[1], y.range[1] + (y.shift.pct + 0.05) * y.len),
+                  # hjust = c(-1 * x.text.nudge, x.shift.pct * 0.5),
+                  # vjust = c(y.shift.pct * 0.5, y.text.nudge),
+                  hjust = c(0, 0), 
+                  vjust = c(0, 1),
+                  angle = c(0, 90),
+                  label = c(x.slot, y.slot))
+  # hjust and vjust: for UMAP_1, position determined by lower left corner
+  # for UMAP_2, position determined by upper left corner
+  # then UMAP_2 gets rotated 90 degrees. Note we first determine its position, before rotating!
+  # it is rotated using the upper left corner as the pivot.
+  p <- p + geom_text(data = dt, 
+                     aes(x = x, y = y, label = label, angle = angle,
+                         hjust = hjust, vjust = vjust),
+                     inherit.aes = F,
+                     size = 2)
+  
+  return(p)
+}
+
+
+legend.plot <- function(df, cluster.col = "cell_type", color.col = "color",
+                        text.size = 5, pt.size = 1, 
+                        # text size is the normal size. the code will do 0.36 * text.size
+                        # for geom_text()
+                        width = 1, height = 2,
+                        out.file) {
+  # df: 2 columns, cluster and color.
+  if (is.character(df)) {
+    df <- read.table(df, header = T, comment.char = "", sep = "\t")
+  }
+  
+  utilsFanc::check.intersect(c(cluster.col, color.col), "required columns", 
+                             colnames(df), "colnames(df)")
+  
+  df <- df[, c(cluster.col, color.col)]
+  colnames(df) <- c("cluster", "color")
+  df <- df[nrow(df):1,]
+  
+  df$y <- 1:nrow(df)
+  df$color[df$color == ""] <- "white"
+  
+  pdf <- df[, c("y", "color")]
+  pdf$x <- 1
+  
+  cdf <- df[, c("y", "cluster")]
+  cdf$x <- 1.25
+  cdf$x[pdf$color == "white"] <- 1
+  
+  color.vec <- df$color %>% unique()
+  names(color.vec) <- color.vec
+  
+  p <- ggplot(pdf, aes(x = x, y = y)) +
+    geom_point(aes(color= color), size = pt.size) +
+    geom_text(data = cdf, aes(x = x, y = y, label = cluster, hjust = 0), 
+              size = 0.36 * text.size,
+              inherit.aes = F) +
+    scale_color_manual(values = color.vec) + 
+    xlim(c(1, 2.5)) +
+    theme_void() +
+    theme(legend.position = "none")
+  dir.create(dirname(out.file), showWarnings = F, recursive = T)
+  ggsave(out.file, p, device = cairo_pdf, width = width, height = height,
+         dpi = 300)
+  invisible(p)
+}
+
+
+umap.fanc <- function(obj, 
+                      # metadata mode:
+                      group.by, groups = NULL, 
+                      highlight.mode = F, 
+                      # common
+                      split.by = NULL, splits = NULL,
+                      polygon.df = NULL, # polygon untested
+                      cols = NULL, pt.size = 0.05, pt.shape = 18,
+                      show.legends = F, dpi = 300, axis.type = "schema",
+                      plot.out = NULL, ...) {
+  if ("Seurat" %in% class(obj)) {
+    df <- obj@reductions$umap@cell.embeddings %>% as.data.frame()
+    
+    utilsFanc::check.intersect(group.by, "group.by", colnames(obj@meta.data), "colnames(obj@meta.data)")
+    df$group <- obj@meta.data[, group.by]
+    
+    if (!is.null(split.by)) {
+      utilsFanc::check.intersect(split.by, "split.by", colnames(obj@meta.data), "colnames(obj@meta.data)")
+      df$split <- obj@meta.data[, split.by]
+    }
+    
+  } else if ("ArchRProject" %in% class(obj)) {
+    df <- obj@embeddings$UMAP$df
+    colnames(df) <- c("UMAP_1", "UMAP_2")
+    df$group <- ArchR::getCellColData(obj, select = c(group.by), drop = T)
+    if (!is.null(split.by)) {
+      df$split <- ArchR::getCellColData(obj, select = c(split.by), drop = T)
+    }
+  }
+  
+  if (is.null(split.by)) {
+    df$split <- ""
+  }
+  
+  if (!is.null(groups)) {
+    if (highlight.mode == T) {
+      df$group <- as.character(df$group)
+      groups <- as.character(groups)
+      df$group[df$group %in% groups] <- "inHl"
+      df$group[!df$group %in% "inHl"] <- "outHl"
+      
+      show.legends <- F
+      
+      if (is.null(cols)) {
+        cols <- c("blue","grey80")
+        names(cols) <- c("inHl", "outHl")
+      } else if (!identical(sort(names(cols)), c("inHl", "outHl"))) {
+        stop("highlight mode. cols must be named inHl and outHl")
+      }
+    } else {
+      df <- df %>% dplyr::filter(group %in% groups)
+    }
+  }
+  
+  if (!is.null(splits)) {
+    df <- df %>% dplyr::filter(split %in% splits)
+    splits <- splits %>% .[.%in% df$split]
+    df$split <- factor(df$split, levels = splits)
+  } else {
+    splits = ""
+  }
+  
+  if (nrow(df) < 1) {
+    stop("nrow(df) < 1")
+  }
+  
+  xmax <- max(df$UMAP_1)
+  xmin <- min(df$UMAP_1)
+  ymax <- max(df$UMAP_2)
+  ymin <- min(df$UMAP_2)
+  
+  pl <- df %>% split(f = df$split) %>% 
+    lapply(function(df) {
+      p <- ggplot(df, aes_string(x = "UMAP_1", y = "UMAP_2")) +
+        geom_point(aes_string(color = "group", fill = "group"), 
+                   size = pt.size, shape = pt.shape, stroke = 0.05)
+      if (!is.null(cols)) {
+        p <- p + scale_color_manual(values = cols)
+      }
+      
+      p <- p + 
+        xlim(xmin, xmax) + 
+        ylim(ymin, ymax) +
+        theme(aspect.ratio = 1) +
+        ggtitle(paste0(df$split[1]))
+      
+      if (!is.null(polygon.df))
+        p <- p + geom_polygon(data = polygon.df, mapping = aes(x = x, y = y),
+                              fill = NA, color = "red")
+      
+      if (axis.type == "schema") {
+        p <- p + theme_void() + umap.axis.schema(p)
+      } else if (axis.type == "number") {
+        p <- p + theme_bw()
+      } else {
+        stop("axis.type must be schema or number")
+      }
+      
+      if (!show.legends) {
+        p <- p + theme(legend.position = "none")
+      }
+      return(p)
+    })
+  
+  if (length(pl) > 1) {
+    p <- wrap.plots.fanc(plot.list = pl, n.split = length(splits), plot.out = plot.out, ...)
+  } else {
+    p <- pl[[1]]
+    if (!is.null(plot.out)) {
+      dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+      ggsave(plot.out, p, width = 2, height = 2, dpi = dpi, 
+             device = ifelse(grepl("pdf$", plot.out), cairo_pdf, tools::file_ext(plot.out)))
+    }
+  }
+  invisible(p)
+}
+
+cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL, 
+                             average.across, average.groups = NULL, average.method = "pct",
+                             color.map = NULL,
+                             out.file = NULL) {
+  # it plots the type of bar graph where each column sums to 1
+  # x: what you want the x axis to be
+  # xs: the x's that you want to plot. For example, you might only want to plot 2 out of 6 samples
+  # group.by: e.g. seurat_clusters or cell_type
+  # average.across: for example, "rep", which means you average across each replicate
+  # average.method: pct or number. If pct, we first compute the percentage of each cluster 
+  # for each group, and then average across, say, replicates. if number, we first merge all replicates
+  # and then calculate percentage of each cluster
+  # color.map: a vector of colors. names(color.map) are group names
+  utilsFanc::check.intersect(c(x, group.by, average.across), "required columns",
+                             colnames(soi@meta.data), "colnames(soi@meta.data)")
+  meta <- soi@meta.data[, c(x, group.by, average.across)]
+  colnames(meta) <- c("x", "group.by", "average.across")
+  
+  if (!is.null(xs)) {
+    meta <- meta %>% dplyr::filter(x %in% xs)
+  }
+  if (!is.null(groups)) {
+    meta <- meta %>% dplyr::filter(group.by %in% groups)
+    meta$group.by <- factor(meta$group.by, levels = unique(groups))
+  }
+  if (!is.null(average.groups))
+    meta <- meta %>% dplyr::filter(average.across %in% average.groups)
+  
+  if (nrow(meta) < 1) {
+    stop("after filtering no cells were left")
+  }
+  
+  plot.df <- meta %>% split(., f = .$x) %>% lapply(function(xdf) {
+    tmp <- xdf$x[1]
+    if (average.method == "pct") {
+      xdf <- xdf %>% dplyr::group_by(group.by, average.across) %>% dplyr::summarise(n = n()) %>% 
+        dplyr::ungroup() %>% dplyr::group_by(average.across) %>% dplyr::mutate(pct = n/sum(n)) %>% 
+        dplyr::ungroup() %>% dplyr::group_by(group.by) %>% 
+        dplyr::summarise(pct = mean(pct))
+    } else if (average.method == "number") {
+      xdf <- xdf %>% dplyr::group_by(group.by) %>% dplyr::summarise(n = n()) %>% 
+        dplyr::ungroup() %>% dplyr::mutate(pct = n/sum(n))
+    } else {
+      stop("average.method must be pct or number")
+    }
+    xdf <- dplyr::ungroup(xdf) %>% as.data.frame() 
+    xdf$x <- tmp
+    return(xdf)
+  }) %>% do.call(rbind, .)
+
+  p <- ggplot(plot.df, aes(x = x, y = pct)) +
+    geom_bar(aes(fill = group.by), stat = "identity")
+  
+  if (!is.null(color.map)) {
+    utilsFanc::check.intersect(unique(plot.df$group.by), "groups",
+                               names(color.map), "names(color.map)")
+    p <- p + scale_fill_manual(values = color.map)
+  }
+  trash <- wrap.plots.fanc(list(p), plot.out = out.file)
   invisible(p)
 }

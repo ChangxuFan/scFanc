@@ -265,19 +265,31 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
   return(res)
 }
 
-de.2.gsea.txt <- function(pbl, pheno.col, out.dir) {
+de.2.gsea.txt <- function(pbl, pheno.col, to.upper = T, grep.exclude = NULL,
+                          out.dir, root.name = NULL) {
+  if (is.null(root.name)) {
+    root.name <- basename(out.dir)
+  }
   dir.create(path = out.dir, recursive = T, showWarnings = F)
   lapply(pbl, function(s2b) {
     s2b$bulkNorm <- s2b$bulkNorm %>% 
-      dplyr::mutate(DESCRIPTION = "na", gene = toupper(gene)) %>% 
+      dplyr::mutate(DESCRIPTION = "na") %>% 
       dplyr::rename(NAME = "gene")
+    if (to.upper) {
+      s2b$bulkNorm$NAME <- toupper(s2b$bulkNorm$NAME)
+    }
+    
     exp.df <- cbind(s2b$bulkNorm[, c("NAME", "DESCRIPTION")], 
                 s2b$bulkNorm %>% .[, ! colnames(.) %in% c("NAME", "DESCRIPTION")])
+    if (!is.null(grep.exclude)) {
+      exp.df <- exp.df %>% 
+        dplyr::filter(!grepl(paste0(grep.exclude, collapse = "|"), NAME))
+    }
     
-    write.table(exp.df, paste0(out.dir, "/", s2b$root.name, "_exp.txt"),
+    write.table(exp.df, paste0(out.dir, "/", root.name, "_", s2b$root.name, "_exp.txt"),
                 sep = "\t", quote = F, row.names = F, col.names = T)
     pheno <- s2b$coldata[colnames(exp.df)[-c(1,2)], pheno.col]
-    cls <- paste0(out.dir, "/", s2b$root.name, "_pheno.cls")
+    cls <- paste0(out.dir, "/", root.name, "_", s2b$root.name, "_pheno.cls")
     line1 <- c(length(pheno), length(unique(pheno)), 1)
     write(line1, sep = " ", cls)
     line2 <- c("#", names(table(pheno))) %>% paste0(collapse = " ")
@@ -290,6 +302,7 @@ de.2.gsea.txt <- function(pbl, pheno.col, out.dir) {
 
 
 de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "log_p",
+                     to.upper = T,
                      pbl.topn = NULL, pbl.samples, pbl.clusters = NULL,
                      comp, pos.filter=NULL, neg.filter=NULL, out.dir, root.name = NULL) {
   # rank.by: log_p or log2FoldChange
@@ -300,8 +313,11 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "lo
   if (!is.null(de.grid)) {
     comparison <- comp
     df <- de.grid$grid.sum %>% filter(comp == comparison) %>% 
-      mutate(log_p = -1 * utilsFanc::log2pm(p, base = 10) * (logFC/abs(logFC)) , gene = toupper(gene)) %>% 
+      mutate(log_p = -1 * utilsFanc::log2pm(p, base = 10) * (logFC/abs(logFC))) %>% 
       filter(log_p != 0) %>% dplyr::select(gene, log_p, master.ident)
+    if (to.upper) {
+      df$gene <- toupper(df$gene)
+    }
   } else {
     if (is.character(pbl))
       pbl <- readRDS(pbl)
@@ -404,7 +420,8 @@ gmt.get.gs <- function(gmt = GMT.FILES["msigdb.v7.2"], gs.names) {
 gmt.gen <- function(gene.list = NULL, # start from raw gene list 
                      genes.df = NULL, gmt.vec.in = GMT.FILES["msigdb.v7.2"], geneset.names = NULL,
                     # subset a gmt file. regex enabled, genes.df: gmt already read in.
-                     out.dir, gmt.name) {
+                    to.upper = T, 
+                    out.dir, gmt.name) {
   # gene.list format: list(type1 = c("miao", "wang"), type2 = c("aa", "huhu"))
   if (is.null(gene.list)) {
     if (is.null(genes.df)) {
@@ -424,7 +441,10 @@ gmt.gen <- function(gene.list = NULL, # start from raw gene list
   if (is.null(names(gene.list)))
     stop("gene.list must be named")
   outs <- lapply(names(gene.list), function(name) {
-    genes <- gene.list[[name]] %>% toupper()
+    genes <- gene.list[[name]]
+    if (to.upper) {
+      genes <- genes %>% toupper()
+    }
     out <- c(name, "http://miao.html", genes)
     out <- paste0(out, collapse = "\t")
     return(out)
@@ -702,6 +722,9 @@ de.enrich.da <- function(de, da, gtf.gr, da.fc.filter = 1, plot.out = NULL) {
       # if (type == "down" && a2b$root.name == "seurat_clusters_3")
       #   browser()
       genes <- s2b$summary[[paste0(type, ".genes")]]
+      # note: gene_type == "protein_coding" is not good enough. 
+      # some coding genes could still have non-coding transcripts.
+      # Should be transcript_type == "protein_coding"
       tss.gr <- gtf.gr %>% plyranges::filter(gene_name %in% genes, type == "transcript", 
                                              gene_type == "protein_coding") %>% 
         resize(width = 1, fix = "start", ignore.strand = F) %>% as.data.frame() %>% 

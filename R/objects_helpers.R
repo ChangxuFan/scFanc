@@ -619,14 +619,14 @@ int.corr.plot <- function(soi, sol, samples = NULL,
   return()
 }
 
-get.cell.list <- function(obj, is.ao = F, cells.include = NULL, n.cells.each = NULL,
+get.cell.list <- function(obj, is.ao = F, style = "ArchR", cells.include = NULL, n.cells.each = NULL,
                           split.by = NULL, splits = NULL, group.by, groups = NULL,
                           na.rm = T, return.named.vec = F) {
   print ("using get.cell.list. a similar function is archr.get.cells.grid()")
   if (is.ao == F) {
     # obj is so
     df <- obj@meta.data[, c(split.by, group.by), drop = F] %>% factor2character.fanc()
-    df$cells <- get.cell.names.seurat(so = obj, style = "ArchR")
+    df$cells <- get.cell.names.seurat(so = obj, style = style)
   } else {
     # obj is ao
     df <- getCellColData(ArchRProj = obj, select = c(split.by, group.by), drop = F) %>% as.data.frame() %>%
@@ -880,4 +880,31 @@ outer.paste <- function(string.list, sep = "..") {
          string.list) %>% as.character() %>% return()
 }
 
+gene.peak.df.by.dist <- function(genes = NULL, promoters.gr, peaks, distance.1side = 50000) {
+  # promoters.gr: something like "~/genomes/mm10/TSS/gencode.vM24.TSS.bed"
+  # peaks: chr:start-end
+  if ("gene_name" %in% colnames(mcols(promoters.gr))) {
+    promoters.gr$gene <- promoters.gr$gene_name
+  }
+  
+  utilsFanc::check.intersect(
+    c("gene"), "required fields",
+    colnames(mcols(promoters.gr)), "colnames(mcols(promoters.gr))")
+  
+  if (is.null(genes)) {
+    genes <- promoters.gr$gene %>% unique()
+  }
+  
+  utilsFanc::check.intersect(
+    genes, "genes", promoters.gr$gene, "promoter.gr$gene"
+  )
+  
+  promoters.gr <- promoters.gr[promoters.gr$gene %in% genes]
+  promoters.gr <- resize(promoters.gr, width = 2 * distance.1side, fix = "center")
+  peaks <- utilsFanc::loci.2.df(loci.vec = peaks, remove.loci.col = F, return.gr = T)
+  df <- df <- plyranges::join_overlap_left(promoters.gr, peaks) %>% 
+    as.data.frame() %>% dplyr::select(gene, loci) %>% unique() %>% na.omit()
+  colnames(df) <- c("gene", "peak")
+  return(df)
+}
 
