@@ -1497,7 +1497,7 @@ footprint.decomposition <- function(seFoot, flank = 250, flankNorm = 50, # norm.
                                     footprint.smoothWindow = 20, pileup.smoothWindow = 100,
                                     pal = NULL, baseSize = 5, ymax.fix = NULL,
                                     out.dir, root = NULL, title.root = "", remove.legend = F,
-                                    debug = T, debug.xlim = 60) {
+                                    debug = F, debug.xlim = 60) {
   # Motif composition doesn't really make sense
   # Eventually this function was only useful for the debug mode where I assessed what the 
   # background bias looked like.
