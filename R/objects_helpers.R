@@ -28,7 +28,7 @@ cluster.subset <- function(so, clusters) {
 
 count.by.cluster <- function(so,work.dir= NULL, root.name = NULL, meta="seurat_clusters", 
                              group.by = NULL, groups.list = NULL, mixedSort = T,
-                             meta.df = NULL) {
+                             meta.df = NULL, write.xls = F) {
   if (is.null(meta.df))
     meta.df <- so@meta.data %>% factor2character.fanc()
   if (is.null(group.by))
@@ -43,6 +43,9 @@ count.by.cluster <- function(so,work.dir= NULL, root.name = NULL, meta="seurat_c
     if (i == 1) 
       group.name <- paste0(group.by, "_all")
     df <- meta.df %>% .[.[,group.by] %in% groups.list[[i]], meta] %>% table() %>% as.data.frame()
+    if (mixedSort == T) {
+      df <- df[gtools::mixedorder(df$cluster), ]
+    }
     colnames(df) <- c("cluster", "freq")
     df$frac <- df$freq/sum(df$freq)
     sum <- df
@@ -52,9 +55,6 @@ count.by.cluster <- function(so,work.dir= NULL, root.name = NULL, meta="seurat_c
     df <- rbind(df, sum)
     colnames(df) <- c("cluster", paste0(group.name, "_freq"), paste0(group.name, "_frac"))
     df <- df %>% factor2character.fanc()
-    if (mixedSort == T) {
-      df <- df[gtools::mixedorder(df$cluster), ]
-    }
     return(df)
   }) %>% Reduce(left_join, .)
   
@@ -62,8 +62,16 @@ count.by.cluster <- function(so,work.dir= NULL, root.name = NULL, meta="seurat_c
     root.name <- paste0(root.name, "_")
   else
     root.name <- ""
-  if (!is.null(work.dir))
-    write.table(df, work.dir %>% paste0("/",root.name,"cluster_freq.tsv"), sep = "\t", quote = F, col.names = T, row.names = F)
+  if (!is.null(work.dir)) {
+    if (write.xls) {
+      xlsx::write.xlsx(x = df, file = work.dir %>% paste0("/",root.name,"cluster_freq.xlsx"),
+                       sheetName = "cluster_frequency",
+                       append = F, row.names = F, col.names = T)
+    } else {
+      write.table(df, work.dir %>% paste0("/",root.name,"cluster_freq.tsv"), sep = "\t", quote = F, col.names = T, row.names = F)
+    }
+  }
+    
   return(df)
 }
 rbind.fanc <- function(df1, df2) {
@@ -903,7 +911,7 @@ gene.peak.df.by.dist <- function(genes = NULL, promoters.gr, peaks, distance.1si
   promoters.gr <- resize(promoters.gr, width = 2 * distance.1side, fix = "center")
   peaks <- utilsFanc::loci.2.df(loci.vec = peaks, remove.loci.col = F, return.gr = T)
   df <- df <- plyranges::join_overlap_left(promoters.gr, peaks) %>% 
-    as.data.frame() %>% dplyr::select(gene, loci) %>% unique() %>% na.omit()
+    utilsFanc::gr2df() %>% dplyr::select(gene, loci) %>% unique() %>% na.omit()
   colnames(df) <- c("gene", "peak")
   return(df)
 }

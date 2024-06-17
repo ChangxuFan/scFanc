@@ -53,7 +53,6 @@ so.2.bulk <- function(so, root.name = NULL, assay, slot, cells=NULL, genes = NUL
     }
     group.by <- "mult"
   }
-
   meta.df <- meta.df %>% utilsFanc::change.name.fanc(cols.from = group.by, cols.to = "tgroup")
   if (is.null(coldata.columns)) {
     meta.df[, group.by] <- meta.df$tgroup
@@ -62,6 +61,7 @@ so.2.bulk <- function(so, root.name = NULL, assay, slot, cells=NULL, genes = NUL
 
   meta.df$cell.id <- rownames(meta.df)
   if (is.null(cells)) {
+    utilsFanc::check.intersect(sub.idents, "sub.idents", meta.df[, ident], "meta.df[, ident]")
     cells <- meta.df %>% .[.[,ident] %in% sub.idents,] %>% {if (is.null(groups)) .
       else filter(., tgroup %in% groups)} %>%
       pull(cell.id)
@@ -91,7 +91,6 @@ so.2.bulk <- function(so, root.name = NULL, assay, slot, cells=NULL, genes = NUL
   ########
 
   bulk.mat <- exp.df %>% Matrix.utils::aggregate.Matrix(.,groupings = .$tgroup, fun = "sum") %>% t()
-  # browser()
   bulk.mat <- bulk.mat[rownames(bulk.mat) != "tgroup",,drop=F]
   if (take.mean == T) {
     cell.number.df <- meta.df %>% group_by(tgroup) %>% summarise(n = n())
@@ -390,7 +389,7 @@ ao.2.bulk.list <- function(ao, peakmat, pseudo, cell.prep.dir = NULL, sample.ord
                            filter.nz = F, filter.size = NULL, filter.samples = NULL,
                            filter.fun = "max", sequential.filter, protected.genes = NULL,
                            independentFiltering = F,
-                           quantile.norm = F,
+                           quantile.norm = F, 
                            deseq2.norm.method = "ratio", deseq2.locfunc = NULL,
                            coldata.columns = NULL, coldata.df = NULL,
                            pca.ntop = 10000, pca.groupings = NULL,
@@ -429,7 +428,7 @@ ao.2.bulk.list <- function(ao, peakmat, pseudo, cell.prep.dir = NULL, sample.ord
                      match.bg.df = match.bg.df,
                      filter.by = filter.by, filter.limits = filter.limits,
                      bQuantileFilter = bQuantileFilter, cell.prep.dir = cell.prep.dir)
-    a2b <- s2b.deseq(s2b.obj = a2b, quantile.norm = quantile.norm,
+    a2b <- s2b.deseq(s2b.obj = a2b, quantile.norm = quantile.norm, 
                      norm.method = deseq2.norm.method, locfunc = deseq2.locfunc,
                      filter.nz = filter.nz, filter.size = filter.size, filter.samples = filter.samples,
                      filter.fun = filter.fun, sequential.filter = sequential.filter,
@@ -485,7 +484,7 @@ ao.2.bulk.soupmode <- function(ao, peakmat, ref.da, cluster.ident,
   names(da) <- paste0("soup_", names(ref.da))
   return(da)
 }
-s2b.deseq <- function(s2b.obj, quantile.norm = F,
+s2b.deseq <- function(s2b.obj, quantile.norm = F, use.genewise.disperisons = F,
                       norm.method = "ratio", locfunc = NULL, norm.cr.genes = NULL,
                       design, contrast=NULL,
                       use.ori = T, filter.nz = F, filter.size = NULL,
@@ -567,7 +566,13 @@ s2b.deseq <- function(s2b.obj, quantile.norm = F,
       stop("norm.cr.genes currently doesn't work")
     }
     dds <- estimateSizeFactors(dds, type = norm.method, locfunc = locfunc)
-    dds <- estimateDispersions(dds, fitType = "local")
+    if (use.genewise.disperisons) {
+      # this might be needed for microarray data
+      dds <- estimateDispersionsGeneEst(dds)
+      dispersions(dds) <- mcols(dds)$dispGeneEst
+    } else {
+      dds <- estimateDispersions(dds, fitType = "local")
+    }
     dds <- nbinomWaldTest(object = dds)
   }
   s2b.obj[["dds"]]  <- dds
@@ -1006,7 +1011,7 @@ bulk.list <- function(so = NULL, # pbl = NULL,
                       assay = "RNA", slot = "counts",
                       group.by = "sample", groups = NULL, sample.order = NULL,
                       coldata.columns = NULL, design.formula, contrast,
-                      cluster.ident = "seurat_clusters", clusters = NULL,
+                      cluster.ident = "seurat_clusters", clusters = NULL, prepend.cluster.ident = T,
                       filter.nz = F, filter.size = NULL, sequential.filter = T,
                       independentFiltering = F,
                       pca.ntop = 10000, pca.groupings = NULL,
@@ -1017,6 +1022,7 @@ bulk.list <- function(so = NULL, # pbl = NULL,
                       save.rds = T) {
   # you can either start from so or pbl. pbl: pseudobulk list. in the latter case you are just adding
   #the deseq2 component.
+  utilsFanc::check.intersect(clusters, "clusters", so@meta.data[, cluster.ident], "so@meta.data[, cluster.ident]")
   system("mkdir -p " %>% paste0(work.dir, " "))
   if (is.null(plot.dir)) {
     plot.dir <- paste0(work.dir, "/plots/")
@@ -1043,10 +1049,10 @@ bulk.list <- function(so = NULL, # pbl = NULL,
   par.param <- MulticoreParam(workers = threads, stop.on.error = stop.on.error)
   bulk.all.list <- bptry({
     bplapply(clusters, function(cluster) {
-      bulk.all <- so.2.bulk(so, root.name = paste0(cluster.ident, "_", cluster), assay = assay, slot= slot,
+      bulk.all <- so.2.bulk(so, root.name = paste0(ifelse(prepend.cluster.ident, paste0(cluster.ident, "_"), ""), cluster), 
+                            assay = assay, slot= slot,
                             ident = cluster.ident, sub.idents = cluster,
                             group.by = group.by, groups = groups, coldata.columns = coldata.columns)
-
       if (deseq2 == T) {
         bulk.all <- s2b.deseq(s2b.obj = bulk.all, design = design.formula , contrast = contrast,
                               filter.nz = filter.nz, filter.size = filter.size, sequential.filter = sequential.filter,
@@ -1068,7 +1074,7 @@ bulk.list <- function(so = NULL, # pbl = NULL,
   }
   # bulk.all.list <- utilsFanc::safelapply(clusters, function(cluster) {
   # }, threads = threads)
-  names(bulk.all.list) <- paste0(cluster.ident, "_", clusters)
+  names(bulk.all.list) <- lapply(bulk.all.list, function(x) return(x$root.name)) %>% unlist()
   attr(bulk.all.list, "work.dir") <- work.dir
   if (save.rds == T)
     saveRDS(bulk.all.list, paste0(work.dir, "/bulk.list.Rds"))
@@ -1250,7 +1256,9 @@ qn.fanc <- function(mat, ori.size) {
 s2b.hm.single.gene <- function(so, assay, slot,
                                group.ident.1, groups.1 = NULL, group.ident.2, groups.2 = NULL,
                                genes,
-                               plot.ind = T,
+                               maintain.group.order = T, maintain.gene.order = F,
+                               plot.ind = T, 
+                               height.add = 400,
                                plot.dir, root.name = NULL) {
   if (is.null(root.name)) {
     root.name <- basename(plot.dir)
@@ -1297,11 +1305,25 @@ s2b.hm.single.gene <- function(so, assay, slot,
               col.names = T, row.names = F, sep = "\t", quote = F)
   mat.scale <- mat %>% t() %>% scale() %>% t()
   dimnames(mat.scale) <- dimnames(mat)
-  hm <- ComplexHeatmap::Heatmap(matrix = mat.scale, cluster_rows = T, cluster_columns = F,
+  
+  if (maintain.group.order) {
+    if (!is.null(groups.1) && !is.null(groups.2)) {
+      groups <- outer(groups.1, groups.2, function(x, y) return(paste0(x, "..", y))) %>% 
+        t() %>% as.vector()
+      groups <- groups[groups %in% colnames(mat.scale)]
+      mat.scale <- mat.scale[, groups]
+    } else{
+      stop("groups.1 and groups.2 must be supplied to use maintain.group.order")
+    }
+    
+  }
+  
+  hm <- ComplexHeatmap::Heatmap(matrix = mat.scale, cluster_rows = !maintain.gene.order, cluster_columns = F,
                                 show_row_dend = F, clustering_distance_rows = "pearson")
   save.base.plot(hm, file = paste0(plot.dir, "/", root.name, "_norm_scaled_hm.pdf"),
-                 width = 600, height = 15 * nrow(mat.scale) + 150)
-
+                 width = 600, height = 15 * nrow(mat.scale) + height.add)
+  row.order <- suppressWarnings(ComplexHeatmap::row_order(hm))  
+  mat <- mat[row.order,]
   # now we plot individual ones:
   if (plot.ind) {
     ind.dir <- paste0(plot.dir, "/", root.name, "_ind/")

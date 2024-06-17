@@ -1,5 +1,5 @@
 archr.pileup <- function(ao, peak.cat.df, kmo = NULL, peak.mat.full, normalize = T, 
-                         return.df = T) {
+                         return.df = T, return.ao = F) {
   # format of peak.cat.df: peak and cat (category of the peak) are the columns
   if (is.character(peak.mat.full))
     peak.mat.full <- readRDS(peak.mat.full)
@@ -33,13 +33,19 @@ archr.pileup <- function(ao, peak.cat.df, kmo = NULL, peak.mat.full, normalize =
     pileup.mat <- pileup.mat %*% diag(1/depth.vec)
     colnames(pileup.mat) <- cellNames
   }
+  if (return.ao) {
+    for (i in rownames(pileup.mat)) {
+      cellNames <- cellNames[cellNames %in% ao$cellNames]
+      ao <- addCellColData(ao, data = pileup.mat[i,cellNames], cells = cellNames, name = i, force = T)
+    }
+    return(ao)
+  }
   if (return.df == T) {
     # browser()
     pileup.df <- pileup.mat  %>% Matrix::t() %>% as.data.frame()
     rownames(pileup.df) <- cellNames
     return(pileup.df)
-  }
-  
+  } 
   return(pileup.mat)
 }
 

@@ -92,6 +92,7 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
                                use.matrix = "TileMatrix",
                                add.lsi = T, lsi.iterations = 2, lsi.res = 0.2, do.harmony = F,
                                add.cluster = T, add.umap = T,
+                               dimsLSI = 1:30,
                                dimsToUse = NULL, dimsToUse.umap = NULL, dimsToUse.cluster = NULL, cluster.res = 0.8,
                                work.dir, plot.dir = NULL, 
                                use.reduced.dims = c("IterativeLSI", "Harmony"),
@@ -120,7 +121,7 @@ archr.cluster.pipe <- function(ao, so = NULL, plot.only = F,
           # sampleCells = 10000, 
           n.start = 10
         ), 
-        dimsToUse = 1:30,
+        dimsToUse = dimsLSI,
         force = force, outDir = work.dir, ...
       )
     }

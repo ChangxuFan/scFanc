@@ -67,6 +67,18 @@ csv2seurat <- function(csv, project.name) {
   return(nk.scs)
 }
 
+tsv2seurat <- function(tsv, project.name, amit.clean = F) {
+  df <- read.table(tsv, header = T, row.names = 1, sep = "\t")
+  mat <- as.matrix(df)
+  if (amit.clean) {
+    # developed to deal with https://pubmed.ncbi.nlm.nih.gov/29915358/
+    print("Removing gene names with ';' or 'Rik'")
+    mat <- mat[!grepl(";|Rik", rownames(mat)),]
+  }
+  
+  so <- CreateSeuratObject(counts = mat, project= project.name)
+  return(so)
+}
 
 split.by.metadata <- function(so, sample.info,reduction, outdir=NULL, metas.include=NULL, ...) {
   if (is.character(sample.info))
@@ -940,7 +952,7 @@ add.highlight <- function(so, add.cells.list, is.Rds = F) {
     if (is.Rds == T)
       add.cells <- readRDS(add.cells)
     if (!grepl("#", colnames(so)[1]))
-      so <- Renameadd.cells(so, new.names = get.cell.names.seurat(so, style = "ArchR"))
+      so <- RenameCells(so, new.names = get.cell.names.seurat(so, style = "ArchR"))
     so[[col.name]] <- 0
     so@meta.data[colnames(so) %in% add.cells, col.name] <- 1
   }
@@ -1058,7 +1070,7 @@ hash.clustering <- function(sol, grep = "Hash", assay.name = "hash",
   return(sol)
 }
 
-extract.bam <- function(so, sample.map = NULL,n.cells.each = NULL, scAR.naming = F,
+extract.bam <- function(so, sample.map = NULL,n.cells.each = NULL, scAR.naming = F, ATAC.naming = F,
                         bam.subset.range = NULL, # eg. chr6:100000-200000
                         xf.filter = NULL, filter.thread = 1, # for ADT try 25. xf: the xf tag from cellranger
                         method = "sinto", 
@@ -1103,7 +1115,12 @@ extract.bam <- function(so, sample.map = NULL,n.cells.each = NULL, scAR.naming =
   
   utilsFanc::check.intersect(x = unique(df$sample), "samples", 
                              y = sample.map$sample, "sample.map")
-  file <- ifelse(scAR.naming, "gex_possorted_bam.bam", "possorted_genome_bam.bam")
+  file <- "possorted_genome_bam.bam"
+  if (scAR.naming)
+    file <- "gex_possorted_bam.bam"
+  if (ATAC.naming)
+    file <- "atac_possorted_bam.bam"
+  # file <- ifelse(scAR.naming, "gex_possorted_bam.bam", "possorted_genome_bam.bam")
   sample.map$bam.full <- paste0(sample.map$dir, "/outs/", file) %>% 
     normalizePath(mustWork = T)
   cmd.files <- list()
@@ -1298,3 +1315,75 @@ sc.MM.correct <- function(so, MM.df) {
 #   
 # }
 
+cluster.correspondence <- function(df, x, y, step.pct = 0.5, max.steps = 3,
+                                   out.file = NULL) {
+  # something like: df=soi@meta.data, x = "seurat_clusters", y = "Clusters"
+  # initially written to find which ATAC clusters correspond to a given RNA cluster.
+  df <- df[, c(x, y)]
+  names(df) <- c("x", "y")
+  mat <- table(df) %>% as.matrix()
+  y.names <- colnames(mat)
+  
+  out.df <- lapply(1:nrow(mat), function(i) {
+    x.name <- rownames(mat)[i]
+    x <- mat[i, ] %>% as.vector()
+    names(x) <- y.names
+    found <- c()
+    max.value.last <- 1
+    
+    while (length(x) > 0) {
+      max.id <- which.max(x)
+      max.value <- x[max.id]
+      pct <- max.value/max.value.last
+      if (pct < step.pct) break
+      
+      found <- c(found, names(x)[max.id])
+      x <- x[-max.id]
+      max.value.last <- max.value
+    }
+    raw <- paste0(found, collapse = ",")
+    if (length(found) > max.steps) {
+      corr <- NA
+    } else {
+      corr <- raw
+    }
+    df <- data.frame(x = x.name, y = corr, raw = raw)
+    return(df)
+  }) %>% do.call(rbind, .)
+  colnames(out.df) <- c(x, y, "raw")
+  if (!is.null(out.file)) {
+    dir.create(dirname(out.file), showWarnings = F, recursive = T)
+    write.table(out.df, out.file, quote = F, sep = "\t", col.names = T, row.names = F)
+  }
+  invisible(out.df)
+} 
+
+filter.by.cluster.correspondence <- function(
+  so, cluster.ident = "seurat_clusters", filter.by = "Clusters",
+  new.cluster.ident = "scc", 
+  filter.df = NULL, step.pct = 0.5, max.steps = 3,
+  out.dir) {
+  
+  if (is.null(filter.df)) {
+    filter.df <- cluster.correspondence(df = so@meta.data, x = cluster.ident, y = filter.by,
+                                        step.pct = step.pct, max.steps = max.steps, 
+                                        out.file = paste0(out.dir, "/cluster_ident_correspondence.tsv"))
+  }
+  
+  x <- filter.df[, cluster.ident]
+  y <- filter.df[, filter.by] %>% strsplit(",")
+  
+  possible.clusters <- lapply(1:length(x), function(i) {
+    paste0(x[i], "@", y[[i]])
+  }) %>% unlist()
+  
+  so@meta.data$tmp <- paste0(so@meta.data[, cluster.ident], "@", so@meta.data[, filter.by])
+  so@meta.data[, new.cluster.ident] <- so@meta.data[, cluster.ident]
+  so@meta.data[, new.cluster.ident][! so@meta.data$tmp %in% possible.clusters] <- NA
+  
+  cluster.freq <- table(so@meta.data[, c(new.cluster.ident, "sample")]) %>% as.matrix()
+  
+  dir.create(out.dir, showWarnings = F, recursive = T)
+  write.csv(cluster.freq, paste0(out.dir, "/cluster_freq.csv"))
+  return(so)
+}

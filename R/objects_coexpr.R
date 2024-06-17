@@ -267,7 +267,7 @@ coexpr.grid <- function(so, assay, slot,
     }) %>% do.call(rbind, .)
   }) %>% do.call(rbind, .)
   p.df$q <- p.adjust(p = p.df$p, method = "BH")
-
+  
   p.df <- utilsFanc::change.name.fanc(df = p.df, cols.from = c("p", "q"),
                                       cols.to = c("lm.p", "lm.q"))
 
@@ -435,7 +435,7 @@ coexpr.enrich <- function(bmat, by.col = F, enhance.q = F, log2.OR = F) {
       rownames(fisher.df ) <- c("j.n", "j.p")
       fisher <- fisher.test(fisher.df)
       p <- fisher$p.value
-      p <- round(p, digits = 4)
+      # p <- round(p, digits = 4)
 
       pos.ratio <- (n.dp.obs/n.ipjn)/(n.injp/n.dn)
       if (log2.OR) {
@@ -464,14 +464,17 @@ coexpr.enrich <- function(bmat, by.col = F, enhance.q = F, log2.OR = F) {
   if (enhance.q) {
     df.q <- df %>% dplyr::filter(jF > iF) %>%
       dplyr::select(i, j, p) %>%
-      dplyr::mutate(q = round(p.adjust(p, method = "fdr"), digits = 4))
+      dplyr::mutate(q = p.adjust(p, method = "fdr"))
+      # dplyr::mutate(q = round(p.adjust(p, method = "fdr"), digits = 4))
     df.q2 <- df.q
     colnames(df.q2) <- c("j", "i", "p", "q")
     df.q <- rbind(df.q, df.q2)
   } else {
+    
     df.q <- df %>% dplyr::filter(j != i) %>%
       dplyr::select(i, j, p) %>%
-      dplyr::mutate(q = round(p.adjust(p, method = "fdr"), digits = 4))
+      dplyr::mutate(q = p.adjust(p, method = "fdr"))
+      # dplyr::mutate(q = round(p.adjust(p, method = "fdr"), digits = 4))
   }
 
   df <- dplyr::left_join(df, df.q) %>%

@@ -197,7 +197,6 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
   #   rnk.vec <- readRDS(rnk.vec)
   # if (is.character(gmt.vec))
   #   gmt.vec <- readRDS(gmt.vec)
-  
   res <- mclapply(seq_along(rnk.vec), function(i) {
     rnk <- rnk.vec[i]
     rnk.name <- names(rnk.vec)[i]
@@ -234,7 +233,6 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
         if (length(out.dir.base) == 0)
           return(NULL)
         df <- lapply(c("pos", "neg"), function(x) {
-          # browser()
           df.sub <- read.table(Sys.glob(paste0(out.dir.base, "/gsea_report_for_na_", x, "*.tsv")),
                                as.is = T, header = T, sep = "\t", quote = "")
           
@@ -301,7 +299,9 @@ de.2.gsea.txt <- function(pbl, pheno.col, to.upper = T, grep.exclude = NULL,
 }
 
 
-de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "log_p",
+de.2.rnk <- function(de.grid = NULL, pbl = NULL, microarray.mode = F,
+                     pbl.slot = "res", 
+                     rank.by = "log_p", logp.max = 8,
                      to.upper = T,
                      pbl.topn = NULL, pbl.samples, pbl.clusters = NULL,
                      comp, pos.filter=NULL, neg.filter=NULL, out.dir, root.name = NULL) {
@@ -313,7 +313,7 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "lo
   if (!is.null(de.grid)) {
     comparison <- comp
     df <- de.grid$grid.sum %>% filter(comp == comparison) %>% 
-      mutate(log_p = -1 * utilsFanc::log2pm(p, base = 10) * (logFC/abs(logFC))) %>% 
+      mutate(log_p = -1 * pmin(utilsFanc::log2pm(p, base = 10), logp.max) * (logFC/abs(logFC))) %>% 
       filter(log_p != 0) %>% dplyr::select(gene, log_p, master.ident)
     if (to.upper) {
       df$gene <- toupper(df$gene)
@@ -321,29 +321,40 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "lo
   } else {
     if (is.character(pbl))
       pbl <- readRDS(pbl)
-    pbl <- deseq2.summary(pbl = pbl, padj.cutoff = 0.05, force = T)
+    if (!microarray.mode)
+      pbl <- deseq2.summary(pbl = pbl, padj.cutoff = 0.05, force = T)
     # only used to remove invalid elements in the list
     if (!is.null(pbl.clusters)) {
       pbl <- pbl[names(pbl) %in% pbl.clusters]
     }
     df <- lapply(names(pbl), function(name) {
       s2b <- pbl[[name]]
+      if (!pbl.slot %in% names(s2b)) {
+        stop("!pbl.slot %in% names(s2b)")
+      }
       df <- s2b[[pbl.slot]] %>% as.data.frame()
       if (is.null(df$gene))
         df <- df %>% dplyr::mutate(., gene =rownames(.))
       
       if (!is.null(pbl.topn)) {
+        if (is.null(pbl.samples)) {
+          pbl.samples <- colnames(s2b$bulkNorm) %>% .[. != "gene"]
+        }
         top.genes <- lapply(pbl.samples, function(sample) {
-          genes <- s2b$res.exp$gene[rank(-1 * s2b$res.exp[, sample], ties.method = "random") <= pbl.topn]
+          res.exp <- ifelse(microarray.mode, "bulkNorm", "res.exp")
+          genes <- s2b[[res.exp]]$gene[rank(-1 * s2b[[res.exp]][, sample], ties.method = "random") <= pbl.topn]
           return(genes)
         }) %>% Reduce(union, .)
         df <- df %>% filter(gene %in% top.genes)
       }
       df <-  df %>% dplyr::select(gene, pvalue, log2FoldChange) %>% 
-        dplyr::mutate(log_p = -log10(pvalue) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
+        dplyr::mutate(log_p = pmin(-log10(pvalue), 8) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
         dplyr::filter(log_p != 0) %>% dplyr::select(gene, log_p, log2FoldChange, master.ident)
       return(df)
     }) %>% Reduce(rbind, .)
+  }
+  if (nrow(df) < 1) {
+    stop ("nrow(df) < 1")
   }
   rnk.list <- df %>% split(f = df$master.ident) %>% 
     lapply(function(x) {
@@ -372,6 +383,7 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, pbl.slot = "res", rank.by = "lo
   saveRDS(rnk.vec, paste0(out.dir, "/rnk.vec.Rds"))
   return(rnk.vec)
 }
+
 
 gsea.translate <- function(genes.gsea, so=NULL, lookup = MOUSE.GENES, na.2.b2m) {
   if (!is.null(so))
@@ -457,6 +469,122 @@ gmt.gen <- function(gene.list = NULL, # start from raw gene list
   return(res)
 }
 
+de.2.gmt <- function(de, slot = "summary", directions = c("up", "down"), 
+                     to.upper = T,
+                     out.dir, gmt.name) {
+  gene.list <- lapply(de, function(s2b) {
+    summ <- s2b[[slot]]
+    if (is.null(summ)) {
+      stop("slot not found")
+    }
+    
+    gene.list <- lapply(directions, function(direction) {
+      genes <- summ[[paste0(direction, ".genes")]]
+      if (length(genes) < 1) {
+        return()
+      }
+      res <- list()
+      res[[paste0(s2b$root.name, "_", direction)]] <- genes
+      return(res)
+    }) %>% Reduce(c, .)
+    return(gene.list)
+  }) %>% Reduce(c, .)
+  if (is.null(gene.list)) {
+    stop("is.null(gene.list)")
+  }
+  gmt.gen(gene.list = gene.list, to.upper = to.upper, 
+          out.dir = out.dir, gmt.name = gmt.name)
+}
+
+de.reciprocal.gsea <- function(des, slot = "summary", top.n = 12000,
+                               out.dir, directions = c("up", "down"),
+                               fgsea.plot = T,
+                               run = F, force = F, n.par.de = 1) {
+  # des <- list(my = de1, geo = de2)
+  # by default reciprocal: each de in des will be used to do gsea against the 
+  # DEGs of each of the other de's.
+  if (length(des) < 2) {
+    stop("length(des) < 2")
+  }
+  if (is.null(names(des))) {
+    stop("des must be named")
+  }
+  utilsFanc::check.dups(names(des), "names(des)")
+  
+  if (fgsea.plot) {
+    required.fields <- c("gene.set.name.display",
+                         "rank.name.display",
+                         "up.name.display", "down.name.display")
+    
+    lapply(des, function(de) {
+      lapply(de, function(s2b) {
+        if (is.null(s2b$fgsea.meta)) {
+          stop(paste0("fgsea.meta field not found for ", s2b$root.name))
+        }
+        utilsFanc::check.intersect(required.fields, "required.fields",
+                                   names(s2b$fgsea.meta), "names(s2b$fgsea.meta)")
+      })
+    })
+    
+  }
+  
+  utilsFanc::safelapply(names(des), function(query.name) {
+    print(paste0("Query: ", query.name))
+    de.query <- des[[query.name]]
+    des.ref <- des[names(des) != query.name ]
+    out.dir <- paste0(out.dir, "/query_", query.name, "/")
+    gmts <- lapply(names(des.ref), function(ref.name) {
+      de.2.gmt(de = des.ref[[ref.name]], slot = slot,
+               directions = directions, out.dir = paste0(out.dir, "/gmts/"), 
+               gmt.name = ref.name)$gmt
+    }) %>% unlist()
+    names(gmts) <- names(des.ref)
+    
+    rnk.vec <- de.2.rnk(pbl = de.query, out.dir = paste0(out.dir, "/rnk/"),
+                        pbl.topn = top.n, pbl.samples = NULL, microarray.mode = T)
+    # use the plot engine from fgsea:
+
+    if (fgsea.plot) {
+      lapply(rnk.vec, function(rnk) {
+        query.cluster <- basename(rnk) %>% sub("cluster_", "", .) %>% 
+          sub(".rnk$", "", .)
+        s2b.query <- de.query[[query.cluster]]
+        
+        lapply(gmts, function(gmt) {
+          ref.de.name <- basename(gmt) %>% sub(".gmt", "", .)
+          de.ref <- des[[ref.de.name]]
+          lapply(de.ref, function(s2b.ref) {
+            lapply(directions, function(direction) {
+              plot.out <- paste0(
+                out.dir, "/plot_curve/", 
+                "q",query.name, "_", query.cluster,
+                "_r", ref.de.name, "_", 
+                s2b.ref$root.name, "_", direction, ".pdf")
+              gsea.plot.curve(gmt.file = gmt,
+                              gmt.gene.set.name = paste0(s2b.ref$root.name, "_", direction),
+                              gene.set.name.display = paste0("Gene Set: \n", direction, s2b.ref$fgsea.meta$gene.set.name.display),
+                              rank.name.display = s2b.query$fgsea.meta$rank.name.display,
+                              up.name.display = s2b.query$fgsea.meta$up.name.display, 
+                              down.name.display = s2b.query$fgsea.meta$down.name.display,
+                              rnk = rnk,
+                              plot.out = plot.out)
+            })
+          })
+        })
+      })
+    }
+    
+    gsea.fanc(rnk.vec = rnk.vec, gmt.vec = gmts,
+              out.dir = paste0(out.dir, "/gsea/"),
+              thread.rnk = min(3, length(rnk.vec)), thread.gmt = min(3, length(gmts)),
+              n.plot = 80, run = run, force = force, parse = F, parse.only = F, zip = F)
+    
+    
+    
+    return()
+  }, threads = n.par.de) 
+}
+
 # gpo: gsea parse object
 gpo.get.gs <- function(gpo, master.dir, label=NULL, direction = NULL, rnk = NULL, gmt = NULL,
                        genesets = NULL, NES.cutoff = NULL, p.cutoff = NULL, q.cutoff = NULL) {
@@ -501,7 +629,6 @@ gsea.scatter <- function(gs.list=NULL, gmt= GMT.FILES["msigdb.v7.2"], gs.names =
   
   if (is.null(names(gs.list)))
     stop(paste0("gs.list must be named!!"))
-  # browser()
   
   if (is.null(bulk.list)) {
     if (is.null(clusters)) {
@@ -554,7 +681,7 @@ gsea.panel.list <- function(gs.list = NULL, gs.df.list = NULL, so, assay, order 
     })
     names(gs.list) <- names(gs.df.list)
   }
-  # browser()
+
   if (is.null(names(gs.list))) {
     stop("gs.list must be named")
   }
@@ -719,8 +846,7 @@ de.enrich.da <- function(de, da, gtf.gr, da.fc.filter = 1, plot.out = NULL) {
     s2b$summary$non_de.genes <- s2b$res.exp$gene %>% .[!.%in% s2b$summary$de.genes]
     s2b$summary$n.non_de <- length(s2b$summary$non_de.genes)
     stats <- lapply(c("up", "down", "non_de"), function(type) {
-      # if (type == "down" && a2b$root.name == "seurat_clusters_3")
-      #   browser()
+
       genes <- s2b$summary[[paste0(type, ".genes")]]
       # note: gene_type == "protein_coding" is not good enough. 
       # some coding genes could still have non-coding transcripts.
@@ -887,9 +1013,7 @@ msigdb.sum <- function(pbl, cats = NULL, gene.sets = NULL, slot = "msigdb", out.
         if (is.null(enrich.o)) {
           return()
         }
-        # if (s2b$root.name == "seurat_clusters_1" && enrich.name == "C2..CP:BIOCARTA" &&
-        #     type == "up")
-        #     browser()
+
         if (!is.null(gene.sets)) {
           df <- enrich.o@result[gene.sets,] %>% na.omit()
         } else {
@@ -952,9 +1076,7 @@ msigdb.dotplot <- function(pbl, cat.to.plot,
         enrich@result$Description <- enrich@result$ID
         rownames(enrich@result) <- enrich@result$ID
       }
-      # if (s2b$root.name == "seurat_clusters_3" && type == "down") {
-      #   browser()
-      # }
+
       p <- clusterProfiler::dotplot(enrich, showCategory = n, 
                    font.size = font.size,
                    title = paste0(s2b$root.name, " ", type))
@@ -982,7 +1104,7 @@ homer.plot.heatmap <- function(da.homer.dir = NULL, homer.txt.df,
   if (file.exists(motif.names[1])) {
     motif.names <- readLines(motif.names)
   }
-  browser()
+
   # gave up because I realized that the normalization of each row might be an issue
 }
 
@@ -1008,6 +1130,7 @@ homer.plot.bar <- function(da.homer.dir = NULL, homer.txt.df,
     lapply(function(df) {
       df$pvalue <- homer.core.extract(path = df$path, motifs = df$motif, 
                                       use.regex = use.regex, col.num = col.num)
+      
       if (plot.logo) {
         logos <- homer.core.extract(paths = df$path, motifs = df$motif,
                                       use.regex = use.regex, get.logo.path = T)
@@ -1033,7 +1156,7 @@ homer.plot.bar <- function(da.homer.dir = NULL, homer.txt.df,
         dev.off()
       }
       
-      df$motif.ez <- df$motif %>% sub("/.+$", "", .) %>% 
+      df$motif.ez <- df$motif %>% sub("/.+$", "", .) %>% sub(",", "\n", .) %>% 
         factor(., levels = .[rev(order(df$pvalue))])
       if (flip.up.down) {
         df$type[df$type == "up"] <- "miao"
@@ -1082,8 +1205,10 @@ homer.core.extract <- function(paths, motifs, use.regex = F, col.num = 3,
       }
     }
     
-    if (length(value) != 1 )
+    if (length(value) != 1 ) {
       stop(paste0("error in homer.core.extract at motif ", motif, ": length(value) != 1"))
+    }
+      
     return(value)
   }) %>% `names<-`(NULL)
   return(value)
@@ -1114,6 +1239,142 @@ deseq2.homer.gather <- function(da.homer.dir,
     write.table(df, out.file, quote = F, sep = "\t", row.names = F, col.names = T)
   }
   return(df)
+}
+
+homer.plot.pct <- function(homer.txt, motifs,  rm.legend = F, out.dir, root = NULL) {
+  if(is.null(root)) root <- basename(out.dir)
+  if (is.null(names(motifs)))
+    stop("motifs must be named. homer motif names are too long!")
+  df <- read.table(file = homer.txt, header = F, sep = "\t", quote = "", skip = 1)
+  # foreground percentage: V7; bg percentage: V9
+  
+  utilsFanc::check.intersect(motifs, "motifs", df$V1, "df$V1")
+  
+  df <- df[df$V1 %in% motifs, c("V1", "V7", "V9")]
+  colnames(df) <- c("motif.longname", "fg", "bg")
+  map.df <- data.frame(motif.longname = motifs,
+                       motif = names(motifs))
+  df <- left_join(df, map.df, by = "motif.longname")
+  df$motif.longname <- NULL
+  
+  df <- reshape2::melt(df, id.vars = "motif", variable.name = "type", value.name = "pct")
+  df$pct <- df$pct %>% sub("\\.", "", .) %>% sub("%", "", .) %>% paste0("0.", .) %>% as.numeric()
+  df$motif <- factor(df$motif, levels = names(motifs))
+  p <- ggplot(df, aes(x = motif, y = pct)) +
+    geom_bar(aes(fill = type, color = type), stat = "identity", position = "dodge", alpha = 0.5) +
+    scale_y_continuous(labels = scales::percent)
+  p <- utilsFanc::theme.fc.1(p, text.size = 6, rm.x.ticks = F, rotate.x.45 = F, italic.x = F)
+  if (rm.legend)
+    p <- p + theme(legend.position = "none")
+  dir.create(out.dir, showWarnings = F, recursive = T)
+  file <- paste0(out.dir, "/", root, "_pct_bar.pdf")
+  ggsave(file, p, device = cairo_pdf, width = 1, height = 1, dpi = 300)
+  invisible(p)
+}
+
+homer.plot.table <- function(da.homer.dir = NULL, homer.txt.df, 
+                           motif.map, use.regex = F, col.num = 3,
+                           flip.up.down = F, out.dir, plot.logo = F,
+                           width = 3, height = 3, font.size = 12,
+                           logo.width = 200, logo.height = 300,
+                           ...) {
+  if (!is.null(da.homer.dir)) {
+    homer.txt.df <- deseq2.homer.gather(da.homer.dir = da.homer.dir, ...)
+  }
+  if (is.character(homer.txt.df)) {
+    homer.txt.df <- read.table(homer.txt.df, header = T)
+  }
+  if (file.exists(motif.map[1])) {
+    motif.map <- read.table(motif.map, header = T, sep = "\t", quote = "")
+  }
+  j <- left_join(motif.map, homer.txt.df)
+  j$root <- j$name %>% sub("_up|_down", "", .)
+  j$type <- j$name %>% stringr::str_extract("up|down")
+  pl <- split(j, f = j$root) %>% 
+    lapply(function(df) {
+      split(df, f = df$type) %>% 
+        lapply(function(df) {
+          direction <- df$type[1] # up or  down
+          columns <- c(3, 5, 7, 9)
+          names(columns) <- c("pvalue", "FDR", "pct.fg", "pct.bg")
+          
+          df.extract <- lapply(columns, function(i) {
+            homer.core.extract(
+              path = df$path, motifs = df$motif, 
+              use.regex = use.regex, col.num = i)
+          }) %>% as.data.frame()
+          
+          df <- cbind(df, df.extract)
+          
+          df$motif.ez <- df$motif %>% sub("/.+$", "", .) %>% sub(",", "\n", .)
+          df$motif.ez <- df$motif.ez %>% sub("\\(.+$", "", .)
+          df$motif.ez <- df$motif.ez %>% factor(., levels = .[rev(order(df$pvalue))])
+
+          df <- df %>% dplyr::arrange(pvalue)
+          
+          df$motif.ez.copy <- df$motif.ez
+          
+          df$pct.fg <- sub("%", "", df$pct.fg) %>% as.numeric()
+          df$pct.bg <- sub("%", "", df$pct.bg) %>% as.numeric()
+          df$enrich <- df$pct.fg / df$pct.bg
+          
+          df$FDR[df$FDR < 0.0001] <- "< 0.0001"
+          
+          # df.melt <- reshape2::melt(
+          #   df, id.vars = "motif.ez.copy", measure.vars = c("motif.ez", "FDR", "pct.fg", "pct.bg", "enrich"),
+          #   variable.name = "column", value.name = "value")
+          # 
+          # map.df <- data.frame(column = c("motif.ez", "FDR", "pct.fg", "pct.bg", "enrich"),
+          #                      column.pub = c("Motif", "FDR", paste0("% ", direction, "DARs with Motif"),
+          #                                     "% Background with Motif", "Enrichment"))
+          # df.melt <- left_join(df.melt, map.df, by = "column")
+          df.useful <- df[, c("motif.ez", "FDR", "pct.fg", "pct.bg", "enrich")]
+          df.useful$enrich <- round(df.useful$enrich, digits = 2)
+          colnames(df.useful) <- c("Motif", "FDR", paste0("% ", direction, "DARs\nwith Motif"),
+                                   "% Background\nwith Motif", "Fold\nEnrichment")
+          df.useful <- df.useful[, -ncol(df.useful)]
+          fake.df <- data.frame(x = 1:3, y = 1:3)
+          
+          p <- ggplot(fake.df, aes(x = x, y = y)) + geom_point(color = "white", alpha = 0) +
+            scale_x_continuous(expand = expansion(0, 0)) +
+            scale_y_continuous(expand = expansion(0, 0)) +
+            ggpp::annotate("table", x = 1, y = 1, label = df.useful,
+                           table.theme = ggpp::ttheme_gtbw(base_size = 6, base_family = "Arial")) +
+            theme_void() +
+            theme(plot.margin = margin(unit = "in"))
+          
+          plot.out <- paste0(out.dir, "/", df$name[1], "_table.pdf")
+          dir.create(out.dir, showWarnings = F, recursive = T)
+          ggsave(plot.out, p, width = 2.3, height = 0.5 + 0.1 * nrow(df), device = cairo_pdf)
+          
+          if (plot.logo) {
+            logos <- homer.core.extract(paths = df$path, motifs = df$motif,
+                                        use.regex = use.regex, get.logo.path = T)
+            logos <- logos[order(df$pvalue)]
+            if (any(!file.exists(logos))) {
+              stop(paste0("these files do not exist: ",
+                          paste0(logos[!file.exists(logos)]), collapse = "\n"))
+            }
+            logos <- lapply(logos, rsvg::rsvg)
+            widths <- sapply(logos, dim)[2, ]
+            widths <- round(widths/max(widths), 2)
+            dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+            png(paste0(tools::file_path_sans_ext(plot.out), "_logo.png"),
+                width = logo.width, height = logo.height, res = 100)
+            try({
+              par(mar=rep(0,4))
+              layout(matrix(1:length(logos), ncol=1, byrow=TRUE))
+              for(i in 1:length(logos)) {
+                print(plot(NA,xlim=0:1,ylim=0:1,xaxt="n",yaxt="n",bty="n"))
+                print(rasterImage(logos[[i]],0,0, widths[i],1))
+              }
+            })
+            dev.off()
+          }
+          return()
+        })
+    })
+
 }
 
 t.f.titrate.gene.enrich <- function(de.list, lfc, summ, msigdb.cats, universes, root.name = NULL, out.dir) {
@@ -1155,5 +1416,173 @@ t.f.titrate.gene.enrich <- function(de.list, lfc, summ, msigdb.cats, universes, 
       })
       
     })
+  })
+}
+
+
+
+gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name, 
+                            # 3 different entrys: you can directly supply a vector of genes as the gene set.
+                            # or, you can give a gmt file and specify which gene set from the gmt
+                            rnk, # rnk file, you know how it works...
+                            gene.set.name.display = "gene_set", # the title of the plot
+                            gseaParam = 1, # the exponent for score calculation
+                            rank.name.display = "rank", # x axis of the plot
+                            up.name.display = "up", # something like KO > WT
+                            down.name.display = "down", # something like KO < WT
+                            plot.out = NULL, width = 1.5, height = 1
+) {
+  if (is.null(genes)) {
+    genes <- gmt.get.gs(gmt = gmt.file, gs.names = gmt.gene.set.name)[[gmt.gene.set.name]]
+  }
+  
+  df <- read.table(rnk, header = F)
+  stats <- df$V2
+  names(stats) <- df$V1
+  pathway <- genes
+  
+  # mostly copying code from fgsea::plotEnrichment ...
+  rnk <- rank(-stats)
+  ord <- order(rnk)
+  statsAdj <- stats[ord]
+  statsAdj <- sign(statsAdj) * (abs(statsAdj)^gseaParam)
+  statsAdj <- statsAdj/max(abs(statsAdj))
+  pathway <- unname(as.vector(na.omit(match(pathway, names(statsAdj)))))
+  pathway <- sort(pathway)
+  gseaRes <- fgsea::calcGseaStat(statsAdj, selectedStats = pathway, 
+                                 returnAllExtremes = TRUE)
+  bottoms <- gseaRes$bottoms
+  tops <- gseaRes$tops
+  n <- length(statsAdj)
+  xs <- as.vector(rbind(pathway - 1, pathway))
+  ys <- as.vector(rbind(bottoms, tops))
+  toPlot <- data.frame(x = c(0, xs, n + 1), y = c(0, ys, 0))
+  # diff <- (max(tops) - min(bottoms))/8
+  x = y = NULL
+  ymin <- toPlot$y %>% min()
+  ymax <- toPlot$y %>% max()
+  diff <- ymax - ymin
+  ticksSize <- 0.08
+  tick.length <- diff * 0.2
+  tick.min <- ymin - tick.length
+  tick.max <- ymin
+  tick.color <- "green3"
+  
+  #>>>>>>>>>>>> FANC:: add ribbon to plot
+  names(df) <- c("gene", "metric")
+  df <- df %>%
+    dplyr::arrange(desc(metric)) %>%
+    dplyr::mutate(
+      rank = 1:nrow(df),
+      trend = ifelse(metric > 0, "up", "down"))
+  
+  df <- df %>% split(., f= .$trend) %>% lapply(function(df) {
+    r <- df$rank
+    if (df$metric[1] > 0) {
+      r <- -1 * r
+    }
+    df$cat <- cut(r, breaks = 3) %>% as.numeric()
+    
+    if (df$metric[1] < 0) {
+      df$cat <- -1 * df$cat
+    }
+    
+    df <- df %>% split(., f = .$cat) %>% lapply(function(df){
+      data.frame(
+        xmin = min(df$rank),
+        xmax = max(df$rank),
+        type = df$cat[1]
+      )
+    }) %>% do.call(rbind, .)
+    return(df)
+  }) %>% do.call(rbind, .)
+  # df$type <- factor(df$type, levels = c(paste0("down", 1:3 ), paste0("up", 1:3))) %>% as.numeric()
+  
+  ribbon.size = 0.08 # as a fraction of diff, which is ymin - ymax
+  ribbon.min <- tick.min - ribbon.size
+  df$ymin <- ribbon.min
+  df$ymax <- tick.min
+  #<<<<<<<< FANC:: add ribbon to plot
+  
+  #>>>>>>>> FANC: manually add x.label to plot:
+  # 
+  xmin = min(toPlot$x)
+  xmax = max(toPlot$x)
+  xrange = xmax - xmin
+  xmid <- floor(xmin + 0.5 * xrange)
+  x.lab.min <- ribbon.min - 0.3 * diff
+  updown.min <- x.lab.min - 0.3 * diff
+  # print(xmid)
+  p <- ggplot(toPlot, aes(x = x, y = y)) + 
+    # geom_point(color = "green", size = 0.1) + 
+    ggrastr::rasterize(geom_line(color = "gold", size = 0.3), dpi = 300) +
+    ggrastr::rasterize(geom_segment(data = data.frame(x = pathway), 
+                 mapping = aes(x = x,y = tick.min, xend = x, yend = tick.max), 
+                 size = ticksSize, alpha = 1, color = tick.color), dpi = 300) + 
+    geom_rect(data = df, 
+              mapping = aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = type), 
+              size = 0, show.legend = F) +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+    # geom_hline(yintercept = max(tops), colour = "red", linetype = "dashed") + 
+    # geom_hline(yintercept = min(bottoms), colour = "red", linetype = "dashed") + 
+    # geom_hline(yintercept = 0, colour = "black") +
+    # geom_text(data = text.df, aes(x = x, y = y, label = text), inherit.aes = F, size = 0.36 * 6) + 
+    annotate("text", x = xmin, y = ribbon.min, label = rank.name.display,
+             hjust = 0, vjust = 1.4, size = 0.36 * 5.5,
+             family = "Arial") +
+    annotate("text", x = xmin, y = x.lab.min, label = up.name.display,
+             hjust = 0, vjust = 1.3, color = "red", size = 0.36 * 5.5,
+             family = "Arial") +
+    annotate("text", x = Inf, y = x.lab.min, label = down.name.display,
+             hjust = 1.0, vjust = 1.3, color = "blue", size = 0.36 * 5.5,
+             family = "Arial") +
+    annotate("segment", x = xmin + 0.02 * xrange, xend = xmin + 0.02 * xrange, 
+             y = updown.min - tick.length, yend = updown.min,
+             size = 10* ticksSize, alpha = 1, color = tick.color) + 
+    annotate("text", x = xmin + 0.05 * xrange, y = updown.min, label = "Overlapping Gene Set",
+             hjust = 0, vjust = 1.1, size = 0.36 * 5,
+             family = "Arial") +
+    coord_cartesian(ylim = c(tick.min , ymax),clip="off") +
+    labs(y = "Enrichment Score", title = gene.set.name.display) +
+    theme_bw(base_size = 6, base_family = "Arial") + 
+    theme(panel.border = element_blank(), panel.grid.minor = element_blank(),
+          plot.title = element_text(size = 6, family = "Arial", hjust = 0),
+          plot.margin = margin(t = 0.01, b = 0.3 * height, r = 0.1, l = 0.01, unit = "in"),
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.text.y = element_text(size = 6, family = "Arial"),
+          axis.title.y = element_text(size = 6, family = "Arial", vjust = 0))
+  
+  
+  
+  if (!is.null(plot.out)) {
+    dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+    ggsave(plot.out, p, width = width, height = height, units = "in", device = cairo_pdf)
+  }
+  
+  invisible(p)
+}
+
+gsea.plot.curve.m <- function(job.df, out.dir) {
+  stop("untested")
+  func.fields <- c("gmt.file", "gmt.gene.set.name", "gene.set.name.display", 
+                   "rnk", "rank.name.display",
+                   "up.name.display", "down.name.display")
+  required.fields <- c(func.fields, "out.root")
+  
+  if (is.character(job.df)) {
+    job.df <- read.table(job.df, header = T)
+  }
+  
+  utilsFanc::check.intersect(required.fields, colnames(job.df))
+  
+  lapply(1:nrow(job.df), function(i) {
+    print(paste0("Processing job ", i))
+    df <- job.df[i, ]
+    params <- as.list(df[, func.fields])
+    params$plot.out <- paste0(out.dir, "/", df$out.root, ".pdf")
+    do.call(gsea.plot.curve, params)
+    return()
   })
 }

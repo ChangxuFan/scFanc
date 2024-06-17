@@ -1030,6 +1030,42 @@ seurat.add.archr.embed <- function(so, ao, ao.embedding, embedding.name = NULL) 
   return(so)
 }
 
+seurat.add.archr.matrix <- function(so, mat.se, assays.to.add = NULL, 
+                                    assay.root.name = NULL,
+                                    overwrite = F) {
+  if (!identical(sort(colnames(so)), sort(colnames(mat.se)))) {
+    stop("!is.null(identical(colnames(so), colnames(mat.se)))")
+  }
+  if (is.null(assays.to.add)) {
+    assays.to.add <- names(assays(mat.se))
+  }
+
+  utilsFanc::check.intersect(assays.to.add, "assays.to.add", names(assays(mat.se)), "names(assays(mat.se))")
+
+  so.assays <- names(so@assays)
+  new.assays <- assays.to.add
+  if (!is.null(assay.root.name)) {
+    new.assays <- paste0(assay.root.name, "_", assays.to.add)
+  }
+  bExist <- new.assays %in% so.assays
+  
+  if (sum(bExist) > 0) {
+    if (!overwrite) stop(paste0("Some of the assays already exists, try overwrite = T"))
+    for (a in new.assays[bExist]) {
+      so[[a]] <- NULL
+    }
+  }
+  
+  for (a in assays.to.add) {
+    mat <- assays(mat.se)[[a]]
+    a.name <- a
+    if (!is.null(assay.root.name)) a.name <- paste0(assay.root.name, "_", a)
+    so[[a.name]] <- CreateAssayObject(data = mat)
+  }
+  
+  return(so)
+}
+
 seurat.add.embed <- function(so, embed.df, embedding.name) {
   # embed.df: rownames of embed.df is taken as the cell names.
   # the first 2 columns are taken as the UMAP coordinates.
@@ -1453,6 +1489,576 @@ archr.gene.motif.df.gen <- function(promoters.gr,
   attr(df, "method") <- method
   attr(df, "motifs.use") <- motifs
   attr(df, "motif.min.score") <- ifelse(is.null(motif.min.score), "not specified", motif.min.score)
+  return(df)
+}
+
+footprint.decomposition <- function(seFoot, flank = 250, flankNorm = 50, # norm.factors = NULL,
+                                    normMethod = "none",
+                                    footprint.smoothWindow = 20, pileup.smoothWindow = 100,
+                                    pal = NULL, baseSize = 5, ymax.fix = NULL,
+                                    out.dir, root = NULL, title.root = "", remove.legend = F,
+                                    debug = T, debug.xlim = 60) {
+  # Motif composition doesn't really make sense
+  # Eventually this function was only useful for the debug mode where I assessed what the 
+  # background bias looked like.
+  
+  
+  # seFoot <- getFootprints(ArchRProj = aoi, positions = motifPositions[greped[3]],
+  #                         groupBy = "cluster_type", useGroups = groups[[3]])
+  if (is.null(root)) root <- basename(out.dir)
+  motifs <- names(assays(seFoot))
+  df <- lapply(motifs, function(name) {
+    smoothWindow <- footprint.smoothWindow
+    # copying from .ggFootprint from ArchR.
+    errorList <- list()
+    rowDF <- SummarizedExperiment::rowData(seFoot)
+    footMat <- .getAssay(seFoot[BiocGenerics::which(rowDF[, 2] == "footprint"), ], name)
+    biasMat <- .getAssay(seFoot[BiocGenerics::which(rowDF[, 2] == "bias"), ], name)
+    footDF <- rowDF[BiocGenerics::which(rowDF[, 2] == "footprint"), ]
+    # FANC added:
+    printDF <- footDF
+    pileupDF <- footDF
+    #
+    biasDF <- rowDF[BiocGenerics::which(rowDF[, 2] == "bias"), ]
+    
+    errorList$footMat <- footMat
+    errorList$biasMat <- biasMat
+    errorList$footDF <- footDF
+    errorList$biasDF <- biasDF
+    
+    if (!is.null(smoothWindow)) {
+      footMat <- apply(footMat, 2, function(x) .centerRollMean(x, smoothWindow))
+      biasMat <- apply(biasMat, 2, function(x) .centerRollMean(x, smoothWindow))
+    }
+    
+    # if (!is.null(norm.factors)) {
+    #   
+    # }
+    
+    if (!is.null(flankNorm)) {
+      idx <- which(abs(footDF$x) >= flank - flankNorm)
+      footMat <- t(t(footMat)/colMeans(footMat[idx, , drop = FALSE]))
+      biasMat <- t(t(biasMat)/colMeans(biasMat[idx, , drop = FALSE]))
+      errorList$footMatNorm <- footMat
+      errorList$biasMatNorm <- footMat
+    }
+    
+    if (tolower(normMethod) == "none") {
+      title <- ""
+    }
+    else if (tolower(normMethod) == "subtract") {
+      title <- "Tn5 Bias Subtracted\n"
+      footMat <- footMat - biasMat
+    }
+    else if (tolower(normMethod) == "divide") {
+      title <- "Tn5 Bias Divided\n"
+      footMat <- footMat/biasMat
+    }
+    else {
+      stop("normMethod not recognized!")
+    }
+    
+    # FANC: add pileupMat. This gives the general trend line
+    pileupMat <- apply(footMat, 2, function(x) .centerRollMean(x, pileup.smoothWindow))
+    printMat <- footMat - pileupMat
+    # 
+    
+    footMatMean <- .groupMeans(footMat, SummarizedExperiment::colData(seFoot)$Group)
+    footMatSd <- .groupSds(footMat, SummarizedExperiment::colData(seFoot)$Group)
+    biasMatMean <- .groupMeans(biasMat, SummarizedExperiment::colData(seFoot)$Group)
+    biasMatSd <- .groupSds(biasMat, SummarizedExperiment::colData(seFoot)$Group)
+    smoothFoot <- rowMaxs(apply(footMatMean, 2, function(x) .centerRollMean(x, 11))) # FANC: only used for quantile computation later to set y axis limits
+    
+    # FANC: added:
+    printMatMean <- .groupMeans(printMat, SummarizedExperiment::colData(seFoot)$Group)
+    printMatSd <- .groupSds(printMat, SummarizedExperiment::colData(seFoot)$Group)
+    pileupMatMean <- .groupMeans(pileupMat, SummarizedExperiment::colData(seFoot)$Group)
+    pileupMatSd <- .groupSds(pileupMat, SummarizedExperiment::colData(seFoot)$Group)
+    #
+    
+    errorList$footMatMean <- footMatMean
+    errorList$footMatSd <- footMatSd
+    errorList$biasMatMean <- biasMatMean
+    errorList$biasMatSd <- biasMatSd
+    errorList$smoothFoot <- smoothFoot
+    
+    plotIdx <- seq_len(nrow(footMatMean))
+    
+    plotFootDF <- lapply(seq_len(ncol(footMatMean)), function(x) {
+      data.frame(x = footDF$x, 
+                 mean = footMatMean[, x], 
+                 sd = footMatSd[, x], 
+                 group = colnames(footMatMean)[x]
+                 )[plotIdx, , drop = FALSE]
+    }) %>% Reduce("rbind", .)
+    plotFootDF$group <- factor(paste0(plotFootDF$group), levels = unique(gtools::mixedsort(paste0(plotFootDF$group))))
+    
+    
+# >     plotFootDF %>% head()
+#      x        mean          sd group
+# 1 -250 -0.03867912 0.002682626 3..KO
+# 2 -249 -0.03867912 0.002682626 3..KO
+# 3 -248 -0.03867912 0.002682626 3..KO
+# 4 -247 -0.03867912 0.002682626 3..KO
+# 5 -246 -0.03867912 0.002682626 3..KO
+# 6 -245 -0.03867912 0.002682626 3..KO
+    
+    plotBiasDF <- lapply(seq_len(ncol(biasMatMean)), function(x) {
+      data.frame(x = biasDF$x, 
+                 mean = biasMatMean[, x], 
+                 sd = biasMatSd[, x], 
+                 group = colnames(biasMatMean)[x]
+                 )[plotIdx, , drop = FALSE]
+    }) %>% Reduce("rbind", .)
+    plotBiasDF$group <- factor(paste0(plotBiasDF$group), levels = unique(gtools::mixedsort(paste0(plotBiasDF$group))))
+    
+    plotPrintDF <- lapply(seq_len(ncol(printMatMean)), function(x) {
+      data.frame(x = printDF$x, 
+                 mean = printMatMean[, x], 
+                 sd = printMatSd[, x], 
+                 group = colnames(printMatMean)[x]
+      )[plotIdx, , drop = FALSE]
+    }) %>% Reduce("rbind", .)
+    plotPrintDF$group <- factor(paste0(plotPrintDF$group), levels = unique(gtools::mixedsort(paste0(plotPrintDF$group))))
+    
+    plotPileupDF <- lapply(seq_len(ncol(pileupMatMean)), function(x) {
+      data.frame(x = pileupDF$x, 
+                 mean = pileupMatMean[, x], 
+                 sd = pileupMatSd[, x], 
+                 group = colnames(pileupMatMean)[x]
+      )[plotIdx, , drop = FALSE]
+    }) %>% Reduce("rbind", .)
+    plotPileupDF$group <- factor(paste0(plotPileupDF$group), levels = unique(gtools::mixedsort(paste0(plotPileupDF$group))))
+    
+    
+    errorList$plotFootDF <- plotFootDF
+    errorList$plotBiasDF <- plotBiasDF
+    errorList$plotPrintDF <- plotPrintDF
+    
+    if (is.null(pal)) {
+      pal <- paletteDiscrete(values = gtools::mixedsort(SummarizedExperiment::colData(seFoot)$Group))
+    }
+#     plotMax <- plotFootDF[order(plotFootDF$mean, decreasing = TRUE), 
+#                           ]
+#     plotMax <- plotMax[abs(plotMax$x) > 20 & abs(plotMax$x) < 
+#                          50, ]
+#     plotMax <- plotMax[!duplicated(plotMax$group), ]
+#     plotMax <- plotMax[seq_len(ceiling(nrow(plotMax)/4)), 
+#                        ]
+#     plotMax$x <- 25 # remember that each footprint plot generated in ArchR, only the highest curve is labeled?
+#     # This is how!
+# # > plotMax %>% head()
+# #      x     mean         sd group
+# # 725 25 2.036531 0.05803274 3..WT
+    
+    # FANC: refuse to write each plot individually as in ArchR. Put into a list!
+    if (debug) {
+      df.list <- list(foot = plotFootDF, bias = plotBiasDF)
+    } else {
+      df.list <- list(foot = plotFootDF, pileup = plotPileupDF,
+                      print = plotPrintDF, printZoom = plotPrintDF %>% filter(abs(x) <= 50))
+    }
+    
+    
+    pl <- lapply(names(df.list), function(type) {
+      ymin <- quantile(df.list[[type]]$mean, 0)
+      ymax <- 1.15 * quantile(smoothFoot, 0.999)
+      xlims <- c(min(plotFootDF$x), max(plotFootDF$x))
+      
+      if (!is.null(ymax.fix)) ymax <- ymax.fix
+      
+      if (type %in% c("print", "printZoom")) {
+        ymax = 1.2 * max(df.list[[type]]$mean)
+      }
+      
+      if (type == "printZoom") {
+        xlims <- c(min(df.list$printZoom$x), max(df.list$printZoom$x))
+      }
+      
+      p <- ggplot(df.list[[type]], aes(x = x, y = mean, color = group)) + 
+        geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, linetype = NA, fill = group), 
+                    alpha = 0.4, show.legend = ifelse(type == "foot",T,F)) + 
+        geom_line(size = 0.15) + 
+        scale_color_manual(values = pal) + 
+        scale_fill_manual(values = pal) + 
+        xlab("Distance to motif center (bp)") + 
+        coord_cartesian(expand = FALSE, 
+                        ylim = c(ymin, ymax), 
+                        xlim = xlims) + 
+        # scale_x_continuous(n.breaks = 3) +
+        guides(fill = FALSE) + guides(color = FALSE)
+      
+      #>>>>>>>> testing zone
+      if (debug) {
+        p <- ggplot(df.list[[type]], aes(x = x, y = mean, color = group)) + 
+          geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, linetype = NA, fill = group), 
+                      alpha = 0.4, show.legend = ifelse(type == "foot",T,F)) + 
+          geom_line(size = 0.15) + 
+          # geom_vline(xintercept = seq(from = -20, to = 20, by = 2), size = 0.1, color = "grey50", linetype = "dashed") +
+          geom_vline(xintercept = c(-30, -20, 20, 30), size = 0.5, color = "red", linetype = "dashed") +
+          scale_color_manual(values = pal) + 
+          scale_fill_manual(values = pal) + 
+          xlab("Distance to motif center (bp)") + 
+          coord_cartesian(expand = FALSE,
+                          # ylim = c(ymin, ymax),
+                          xlim = c(-debug.xlim, debug.xlim)) +
+          # scale_x_continuous(n.breaks = 3) +
+          guides(fill = FALSE) + guides(color = FALSE)
+          
+        
+        # file <- paste0(out.dir, "/", root, "_", name, "_", type , "_zoomInView.pdf")
+        # dir.create(out.dir, showWarnings = F, recursive = T)
+        # ggsave(file, p, device = cairo_pdf, width = 4, height = 2)
+        
+        if (type == "foot") {
+          p <- p + ggtitle(name)
+        }
+        return(p)
+      }
+      #<<<<<<<< END testing zone
+      
+      if (type == "foot")
+        p <- p + ggtitle(paste0(title.root, sub("\\(.+$", "", name)))
+      
+      p <- utilsFanc::theme.fc.1(p, rm.x.ticks = F, rotate.x.45 = F, text.size = baseSize, italic.x = F)
+      if (type %in% c("foot", "pileup"))
+        p <- p + theme(aspect.ratio = 1)
+      if (type %in% c("print", "printZoom")) {
+        p <- p + scale_y_continuous(n.breaks = 2)
+      }
+      
+      if (remove.legend)
+        p <- p + theme(legend.position = "none")
+      # dir.create(out.dir, showWarnings = F, recursive = T)
+      # file <- paste0(out.dir, "/", root, "_", name, "_", type, ".pdf")
+      return(p)
+      # ggrepel::geom_label_repel(data = plotMax, aes(label = group), size = 3, xlim = c(75, NA))
+    })
+    names(pl) <- names(df.list)
+    if (debug) {
+      p <- pl$foot + pl$bias + patchwork::plot_layout(ncol = 1)
+      file <- paste0(out.dir, "/", root, "_", name, "_", "_alined.pdf")
+      dir.create(out.dir, showWarnings = F, recursive = T)
+      ggsave(file, p, device = cairo_pdf, width = 4, height = 4)
+      return()
+    } 
+    
+    
+    design <- "
+#B
+AB
+AB
+AB
+AB
+AB
+AC
+#D
+"
+    p <- pl$foot + pl$pileup + pl$print + pl$printZoom + patchwork::plot_layout(design = design)
+    file <- paste0(out.dir, "/", root, "_", name, ".pdf")
+    dir.create(out.dir, showWarnings = F, recursive = T)
+    ggsave(file, p, device = cairo_pdf, width = 2, height = 2)
+    rds <- paste0(out.dir, "/", root, "_", name, "_pl.Rds")
+    saveRDS(pl, rds)
+    # bar plots
+    # center mean
+    center <- ceiling(nrow(footMat)/2)
+    center.range <- (center - 25):(center+25)
+    print("For center mean, using range:")
+    print(paste0(min(center.range), " -> ", max(center.range)))
+    meanMat <- footMat[center.range, ] %>% colMeans() %>% t()
+    
+    df <- colData(seFoot) %>% as.data.frame()
+    df[colnames(meanMat),"center.mean"] <- meanMat[1, ]
+    df <- df[, c("Group", "Name", "center.mean")]
+    df$motif <- name
+    max.value <- df %>% group_by(Group) %>% summarise(mean = mean(center.mean)) %>% pull(mean) %>% max()
+    df$center.mean <- df$center.mean/max.value
+    
+    return(df)
+    
+  }) %>% do.call(rbind, .)
+  if (debug) {
+    return()
+  }
+  df$motif <- sub("\\(.+$", "", df$motif)
+  file <- paste0(out.dir, "/", root, "_stats.tsv")
+  write.table(df, file, sep = "\t", row.names = F, col.names = T, quote = F)
+  groups <- df$Group %>% unique()
+  p <- utilsFanc::barplot.pub.3(
+    df = df, x = "motif", y = "center.mean", color.by = "Group",
+    spread.width = 0.25, spread.bin.size = 1, bar.line.size = 0.5,
+    bar.width = 0.70, dodge.width = 0.8, pt.size = 1, palette.fc = "R4.fc1",
+    add.pval = T, pval.adjust = "fdr", pval.group.1 = groups[1], 
+    pval.group.2 = groups[2]) %>% 
+    utilsFanc::theme.fc.1(rm.x.ticks = F, italic.x = F, rotate.x.45 = F) +
+    coord_cartesian(ylim = c(0.6, 1.05)) +
+    ggsave(paste0(out.dir, "/", root, "_center_mean_bar", ".pdf"),
+           device = cairo_pdf, width = 1, height = 1, dpi = 300)
+  return()
+}
+t.f.footprint.arrange <- function(in.dir, locations, motifs.by.cluster, 
+                                  plot.use = "foot",
+                                  out.dir, root = NULL) {
+  if (is.null(root)) root <- basename(out.dir)
+  
+  lapply(names(motifs.by.cluster), function(cluster) {
+    
+    stats.files <- paste0(in.dir, "/", locations, "_", cluster, "_none_stats.tsv")
+    utilsFanc::check.file.exists(stats.files, "File")
+    
+    stats <- lapply(1:length(stats.files), function(i) {
+      df <- read.table(stats.files[i], sep = "\t", header = T)
+      df$location <- locations[i]
+      return(df)
+    }) %>% do.call(rbind, .)
+    
+    motifs <- motifs.by.cluster[[cluster]]
+    lapply(motifs, function(motif) {
+      motif.short <- motif %>% sub("\\(.+$", "", .)
+      
+      utilsFanc::check.intersect(motif.short, "motif.short", stats$motif, "stats$motif")
+      
+      stats <- stats %>% filter(motif == motif.short)
+      Groups <- stats$Group %>% unique()
+      locations.short <- locations %>% sub("Promoter", "Pro.", .) %>% 
+        sub("Intergenic", "Interg.", .) %>% 
+        sub("Intron", "Intr.", .)
+      stats$location <- stats$location %>% sub("Promoter", "Pro.", .) %>% 
+        sub("Intergenic", "Interg.", .) %>% 
+        sub("Intron", "Intr.", .)
+      stats$location <- factor(stats$location, levels = locations.short)
+      
+      p <- utilsFanc::barplot.pub.3(
+        df = stats, x = "location", y = "center.mean", color.by = "Group",
+        spread.width = 0.25, spread.bin.size = 1, bar.line.size = 0.5,
+        bar.width = 0.70, dodge.width = 0.8, pt.size = 1, palette.fc = "ArchR",
+        add.pval = T, pval.adjust = "fdr", pval.group.1 = Groups[1], alternative = "greater",
+        pval.group.2 = Groups[2]) %>% 
+        utilsFanc::theme.fc.1(rm.x.ticks = F, italic.x = F, rotate.x.45 = F, text.size = 5) +
+        theme(aspect.ratio = 1, legend.position = "none") +
+        coord_cartesian(ylim = c(0.6, 1.2))
+      # ggsave(paste0(out.dir, "/", root, "_center_mean_bar", ".pdf"),
+      #        device = cairo_pdf, width = 1, height = 1, dpi = 300)
+      
+      
+      pl.rds <- paste0(in.dir, "/", locations, "_", cluster, "_none_", motif, "_pl.Rds")
+      utilsFanc::check.file.exists(x = pl.rds, x.name = "File")
+      
+      pl <- lapply(pl.rds, function(x) return(readRDS(x)[[plot.use]]))
+      names(pl) <- locations
+      pl <- lapply(locations, function(location) {
+        p <- pl[[location]]
+        p <- p + labs(title = NULL, subtitle = paste0("    ", location)) +
+          theme(legend.position = "none", 
+                plot.subtitle = element_text(margin = margin(b = -7)))
+        return(p)
+      })
+      
+      pl$stats <- p
+      
+      p <- cowplot::plot_grid(plotlist = pl, align = "hv")
+      file <- paste0(out.dir, "/", root, "_", cluster, "_", motif, "_byLocation.pdf")
+      dir.create(out.dir, showWarnings = F, recursive = T)
+      ggsave(file, p, device = cairo_pdf, width = 1.8, height = 1.8, dpi = 300)
+      return()
+    })
+    
+  })
+}
+
+footprint.df.gen <- function(seFoots, flank = 1000, flankNorm = 100, 
+                             out.dir, root = NULL) {
+  if (is.null(root)) root <- basename(out.dir)
+  
+  if (is.null(names(seFoots))) {
+    stop("seFoots must be named")
+  }
+  clusters <- names(seFoots)
+  
+  dfs <- lapply(clusters, function(cluster) {
+    seFoot <- seFoots[[cluster]]
+    motifs <- names(assays(seFoot))
+    dfs <- lapply(motifs, function(name) {
+      # smoothWindow <- footprint.smoothWindow
+      # copying from .ggFootprint from ArchR.
+      errorList <- list()
+      rowDF <- SummarizedExperiment::rowData(seFoot)
+      footMat <- .getAssay(seFoot[BiocGenerics::which(rowDF[, 2] == "footprint"), ], name)
+      biasMat <- .getAssay(seFoot[BiocGenerics::which(rowDF[, 2] == "bias"), ], name)
+      footDF <- rowDF[BiocGenerics::which(rowDF[, 2] == "footprint"), ]
+      # # FANC added:
+      # printDF <- footDF
+      # pileupDF <- footDF
+      # #
+      biasDF <- rowDF[BiocGenerics::which(rowDF[, 2] == "bias"), ]
+      
+      errorList$footMat <- footMat
+      errorList$biasMat <- biasMat
+      errorList$footDF <- footDF
+      errorList$biasDF <- biasDF
+      
+      # if (!is.null(smoothWindow)) {
+      #   footMat <- apply(footMat, 2, function(x) .centerRollMean(x, smoothWindow))
+      #   biasMat <- apply(biasMat, 2, function(x) .centerRollMean(x, smoothWindow))
+      # }
+      
+      # if (!is.null(norm.factors)) {
+      #   
+      # }
+      
+      if (!is.null(flankNorm)) {
+        idx <- which(abs(footDF$x) >= flank - flankNorm)
+        footMat <- t(t(footMat)/colMeans(footMat[idx, , drop = FALSE]))
+        biasMat <- t(t(biasMat)/colMeans(biasMat[idx, , drop = FALSE]))
+        errorList$footMatNorm <- footMat
+        errorList$biasMatNorm <- footMat
+      }
+      
+      # if (tolower(normMethod) == "none") {
+      #   title <- ""
+      # }
+      # else if (tolower(normMethod) == "subtract") {
+      #   title <- "Tn5 Bias Subtracted\n"
+      #   footMat <- footMat - biasMat
+      # }
+      # else if (tolower(normMethod) == "divide") {
+      #   title <- "Tn5 Bias Divided\n"
+      #   footMat <- footMat/biasMat
+      # }
+      # else {
+      #   stop("normMethod not recognized!")
+      # }
+      
+      # FANC: add pileupMat. This gives the general trend line
+      # pileupMat <- apply(footMat, 2, function(x) .centerRollMean(x, pileup.smoothWindow))
+      # printMat <- footMat - pileupMat
+      # 
+      
+      footMatMean <- .groupMeans(footMat, SummarizedExperiment::colData(seFoot)$Group)
+      footMatSd <- .groupSds(footMat, SummarizedExperiment::colData(seFoot)$Group)
+      biasMatMean <- .groupMeans(biasMat, SummarizedExperiment::colData(seFoot)$Group)
+      biasMatSd <- .groupSds(biasMat, SummarizedExperiment::colData(seFoot)$Group)
+      #    smoothFoot <- rowMaxs(apply(footMatMean, 2, function(x) .centerRollMean(x, 11))) # FANC: only used for quantile computation later to set y axis limits
+      
+      # # FANC: added:
+      # printMatMean <- .groupMeans(printMat, SummarizedExperiment::colData(seFoot)$Group)
+      # printMatSd <- .groupSds(printMat, SummarizedExperiment::colData(seFoot)$Group)
+      # pileupMatMean <- .groupMeans(pileupMat, SummarizedExperiment::colData(seFoot)$Group)
+      # pileupMatSd <- .groupSds(pileupMat, SummarizedExperiment::colData(seFoot)$Group)
+      # #
+      
+      # errorList$footMatMean <- footMatMean
+      # errorList$footMatSd <- footMatSd
+      # errorList$biasMatMean <- biasMatMean
+      # errorList$biasMatSd <- biasMatSd
+      # errorList$smoothFoot <- smoothFoot
+      
+      plotIdx <- seq_len(nrow(footMatMean))
+      
+      plotFootDF <- lapply(seq_len(ncol(footMatMean)), function(x) {
+        data.frame(x = footDF$x, 
+                   mean = footMatMean[, x], 
+                   sd = footMatSd[, x], 
+                   group = colnames(footMatMean)[x]
+        )[plotIdx, , drop = FALSE]
+      }) %>% Reduce("rbind", .)
+      plotFootDF$group <- factor(paste0(plotFootDF$group), levels = unique(gtools::mixedsort(paste0(plotFootDF$group))))
+      
+      
+      # >     plotFootDF %>% head()
+      #      x        mean          sd group
+      # 1 -250 -0.03867912 0.002682626 3..KO
+      # 2 -249 -0.03867912 0.002682626 3..KO
+      # 3 -248 -0.03867912 0.002682626 3..KO
+      # 4 -247 -0.03867912 0.002682626 3..KO
+      # 5 -246 -0.03867912 0.002682626 3..KO
+      # 6 -245 -0.03867912 0.002682626 3..KO
+      
+      plotBiasDF <- lapply(seq_len(ncol(biasMatMean)), function(x) {
+        data.frame(x = biasDF$x, 
+                   mean = biasMatMean[, x], 
+                   sd = biasMatSd[, x], 
+                   group = colnames(biasMatMean)[x]
+        )[plotIdx, , drop = FALSE]
+      }) %>% Reduce("rbind", .)
+      plotBiasDF$group <- factor(paste0(plotBiasDF$group), levels = unique(gtools::mixedsort(paste0(plotBiasDF$group))))
+      
+      coldata <- colData(seFoot) %>% as.data.frame()
+      res <- list(foot.mat = footMat, bias.mat = biasMat, foot.meanSd = plotFootDF, bias.meanSd = plotBiasDF,
+                  coldata = coldata)  
+      
+      return(res)
+    }) 
+    names(dfs) <- motifs
+    return(dfs)
+  })
+  
+  names(dfs) <- clusters
+  file <- paste0(out.dir, "/", root, "_dfs.Rds")
+  dir.create(out.dir, showWarnings = F, recursive = T)
+  saveRDS(dfs, file)
+  return(dfs)
+}
+
+footprint.center.vs.flank <- function(fpo,
+                                      flank.right, flank.left = NULL, 
+                                      center) {
+# fpo: list(foot.mat, bias.mat, foot.meanSd, bias.meanSd, coldata)
+# you get it from footprint.df.gen
+  required <- c("foot.mat", "bias.mat", "foot.meanSd", "bias.meanSd", "coldata")
+  utilsFanc::check.intersect(required, "required elements", names(fpo), "names(fpo)")
+# format of coldata: from ArchR:
+#   Browse[1]> coldata
+#                 Group            Name
+# 0..KO._.KO_rep3 0..KO 0..KO._.KO_rep3
+# 0..KO._.KO_rep2 0..KO 0..KO._.KO_rep2
+# 0..WT._.WT_rep3 0..WT 0..WT._.WT_rep3
+# 0..WT._.WT_rep2 0..WT 0..WT._.WT_rep2
+#                                                                                                                                                File
+# 0..KO._.KO_rep3 /scratch/fanc/others/jun/2022-01-25/sync_all/atac/merge_v1/GroupCoverages/cluster_type_9mer/X0..KO._.KO_rep3.insertions.coverage.h5
+# 0..KO._.KO_rep2 /scratch/fanc/others/jun/2022-01-25/sync_all/atac/merge_v1/GroupCoverages/cluster_type_9mer/X0..KO._.KO_rep2.insertions.coverage.h5
+# 0..WT._.WT_rep3 /scratch/fanc/others/jun/2022-01-25/sync_all/atac/merge_v1/GroupCoverages/cluster_type_9mer/X0..WT._.WT_rep3.insertions.coverage.h5
+# 0..WT._.WT_rep2 /scratch/fanc/others/jun/2022-01-25/sync_all/atac/merge_v1/GroupCoverages/cluster_type_9mer/X0..WT._.WT_rep2.insertions.coverage.h5
+#                 nCells nInsertions
+# 0..KO._.KO_rep3    500    31871130
+# 0..KO._.KO_rep2    362    25468138
+# 0..WT._.WT_rep3    500    36840432
+# 0..WT._.WT_rep2    500    41786660
+  if (is.null(flank.left)) flank.left <- sort(-1 * flank.right)
+  ranges <- list(center = list(center), flank = list(flank.left, flank.right))
+  
+  sum <- lapply(c("foot", "bias"), function(x) {
+    mat <- fpo[[paste0(x, ".mat")]]
+    meanSd <- fpo[[paste0(x, ".meanSd")]]
+    x.range <- meanSd$x %>% unique() %>% sort()
+    if (length(x.range) != nrow(mat)) stop("length(x.range) != nrow(mat)")
+    rownames(mat) <- x.range
+    sum <- lapply(c("center", "flank"), function(r) {
+      sum <- lapply(ranges[[r]], function(r) {
+        r <- sort(r)
+        rows <- as.character(r[1]:r[2])
+        mat <- mat[rows, ]
+        sum <- colSums(mat)
+        return(sum)
+      }) %>% Reduce(`+`, .)
+      sum <- t(sum)
+      return(sum)
+    }) %>% do.call(rbind, .)
+    rownames(sum) <- paste0(x, ".", c("center", "flank"))
+    return(sum)
+  }) %>% do.call(rbind, .)
+  sum <- t(sum)
+  if (!identical(sort(rownames(sum)), sort(fpo$coldata$Name)))
+    stop("!identical(sort(rownames(sum)), sort(fpo$coldata$Name))")
+  
+  sum <- sum[fpo$coldata$Name,]
+  df <- fpo$coldata[, c("Name", "Group")]
+  df <- cbind(df, as.data.frame(sum))
+  df$foot.protect <- 1 - (df$foot.center / df$foot.flank)
+  df$bias.protect <- 1 - (df$bias.center / df$bias.flank)
+  df$foot.vs.bias <- round(df$foot.protect / df$bias.protect, digits = 2)
+  
   return(df)
 }
 

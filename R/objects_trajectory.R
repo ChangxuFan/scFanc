@@ -135,7 +135,7 @@ slingshot.qc <- function(crv.o = NULL, mat.list = NULL, umap = NULL, ao = NULL, 
       p <- ggplot(umap, aes(x = UMAP1, y = UMAP2, color = mat[, curve, drop = T])) + 
         geom_point(size = 0.05) + 
         # scale_color_gradient(low = "midnightblue", high = "green") + 
-        scale_color_gradientn(colors = rev(brewer.pal(5,"Spectral")),na.value = "grey70") +
+        scale_color_gradientn(colors = rev(RColorBrewer::brewer.pal(5,"Spectral")),na.value = "grey70") +
         theme(legend.title = element_blank()) +
         ggtitle(curve)
       return(p)
@@ -158,17 +158,32 @@ archr.pileup.and.trajec.df <- function(ao, curve.o, peak.mat.full, peak.cat.df, 
   return(trajec.df) 
 }
 
-slingshot.seurat <- function(so, cluster.ident, start.clus, end.clus, 
-                             approx_points, plot.dir, root.name = NULL, sling.rds = NULL) {
-  sce <- as.SingleCellExperiment(so)
-  sce <- getLineages(sce, clusterLabels = cluster.ident, reducedDim = "PCA", 
-                     start.clus = start.clus, end.clus = end.clus)
-  sce <- getCurves(sce, approx_points = approx_points)
+slingshot.seurat <- function(so, cluster.ident, reducedDim = "PCA",
+                             start.clus, end.clus, 
+                             approx_points, plot.dir, root.name = NULL, saveRDS = T,
+                             sling.rds = NULL) {
+  if (is.null(sling.rds)) {
+    sce <- as.SingleCellExperiment(so)
+    sce <- getLineages(sce, clusterLabels = cluster.ident, reducedDim = reducedDim, 
+                       start.clus = start.clus, end.clus = end.clus)
+    sce <- getCurves(sce, approx_points = approx_points)
+    
+    sling <- SlingshotDataSet(sce)
+    if (saveRDS) {
+      sling.rds <- paste0(plot.dir, "/", root.name, "_slingshot.Rds")
+      dir.create(plot.dir, showWarnings = F, recursive = T)
+      saveRDS(sling, sling.rds)
+    }
+    # if (!is.null(sling.rds)) {
+    #   dir.create(dirname(sling.rds), showWarnings = F, recursive = T)
+    #   saveRDS(sling, sling.rds)
+    # }
+    
+    # browser()
+  } else {
+    sling <- readRDS(sling.rds)
+  }
   
-  sling <- SlingshotDataSet(sce)
-  if (!is.null(sling.rds))
-    saveRDS(sling, sling.rds)
-  # browser()
   trash <- slingshot.qc(crv.o = sling, umap = so@reductions$umap@cell.embeddings, 
                         plot.dir = plot.dir, root.name = root.name)
   return(sling)
@@ -206,4 +221,79 @@ sling.cmp <- function(sling.1, sling.1.curve, df.1 = NULL,
     ggsave(plot.out, p, width = 7, height = 5, units = "in", dpi = 100)
   }
   return(p)
+}
+
+sling.draw.curve <- function(slingo.list, embed.to.list = NULL,
+                             color.df = NULL,
+                             lineages.list = NULL,
+                             width = 100, height = 120, res = 100,
+                             plot.dir, root = NULL) {
+  # example usage: /bar/cfan/jun/day9_only/revision3.5.1_slingshot_2023-01-05.R
+  # embed.to.list: a list of embed.to
+  # embed.to: a matrix of UMAP coordinates. rownames are cell names.
+  # color.df: must have a column called "cell.name" that matches the cell.name in embed.to
+  # also a column called "color"
+  if (is.null(names(slingo.list))) {
+    stop("slingo.list must be named")
+  }
+  
+  if (!is.null(lineages.list)) {
+    if (!identical(sort(names(slingo.list)), sort(names(lineages.list)))) {
+      stop("names of slingo.list and lineages.list must be the same")
+    }
+  }
+  
+  if (!is.null(embed.to.list)) {
+    if (!identical(sort(names(slingo.list)), sort(names(embed.to.list)))) {
+      stop("names of slingo.list and lineages.list must be the same")
+    }
+  }
+  
+  if (is.null(root)) {
+    root <- basename(plot.dir)
+  }
+  
+  lapply(names(slingo.list), function(sample) {
+    slingo <- slingo.list[[sample]]
+    if (!is.null(lineages.list))
+      lineages <- lineages.list[[sample]]
+    else
+      lineages <- NULL
+    
+    if (!is.null(embed.to.list))
+      embed.to <- embed.to.list[[sample]]
+    else
+      embed.to <- NULL
+    
+    file <- paste0(plot.dir, "/", root, "_", sample, ".pdf")
+    
+    dir.create(dirname(file), showWarnings = F, recursive = T)
+    cairo_pdf(file = file, width = width/res, height = height/res)
+    try({
+      color <- "gold1"
+      if (!is.null(embed.to)) {
+        slingo <- embedCurves(slingo, newDimRed = as.matrix(embed.to[rownames(slingo@reducedDim), 1:2]))
+        to.plot <- embed.to
+        if (!is.null(color.df)) {
+          umap <- as.data.frame(embed.to) %>% mutate(., cell.name = rownames(.))
+          umap <- umap %>% left_join(color.df, by = "cell.name")
+          rownames(umap) <- umap$cell.name
+          if (nrow(umap) != nrow(embed.to)) {
+            stop("nrow(umap) != nrow(embed.to)")
+          }
+          color <- umap$color
+        }
+      } else {
+        to.plot <- slingo
+      }
+      par(mai = c(0, 0, 0.2, 0))
+      print(plot(to.plot, col = color, asp = 1, cex = 0.1,
+                 pch = 18,  bty = "n",
+                 xaxt = 'n', yaxt = 'n', ann = FALSE))
+      print(plot(slingo, type = "c", add = T, linInd = lineages, lwd = 0.8, col = "black"))
+      print(title(sample, cex.main = 0.5))
+    })
+    dev.off()
+  })
+  return()
 }
