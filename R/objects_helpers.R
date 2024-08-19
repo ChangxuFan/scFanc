@@ -916,3 +916,85 @@ gene.peak.df.by.dist <- function(genes = NULL, promoters.gr, peaks, distance.1si
   return(df)
 }
 
+pct.detect.mat <- function(so, genes, group.by, groups = NULL, split.by = NULL, splits = NULL,
+                           style = "ArchR", 
+                           plot.out = NULL, width = NULL, height = NULL,
+                           label.pct = F,
+                           hm.colors = c("white", "green3"), hm.values = NULL, show_column_dend = F,
+                           cluster_columns = T, clustering_distance_columns = "pearson",
+                           cluster_rows = T, clustering_distance_rows = "pearson", ...) {
+  utilsFanc::check.intersect(genes, "genes", rownames(so), "rownames(so)")
+  cells <- get.cell.list(so, group.by = group.by, groups = groups, split.by = split.by, splits = splits, 
+                         is.ao = F, return.named.vec = T, style = style)
+  
+  pct.mat <- aggregate.fanc(mat = soi@assays$RNA@counts[genes, ],
+                            margin = 2, groupings = cells, binarize = T, take.mean = T)
+  pct.mat <- as.matrix(pct.mat)
+  
+  if (!is.null(plot.out)) {
+    data.out <- tools::file_path_sans_ext(plot.out) %>% paste0(".csv")
+    system(paste0("mkdir -p ", dirname(plot.out)))
+    write.csv(pct.mat, data.out, quote = F)
+    
+    if (is.null(width)) width <- 2 + 0.2 * ncol(pct.mat)
+    if (is.null(height)) height <- 1 + 0.2 * nrow(pct.mat)
+    
+    suppressMessages(extrafont::loadfonts())
+    suppressMessages(library(ComplexHeatmap))
+    ht_opt$HEATMAP_LEGEND_PADDING <- unit(0.1, "in")
+    ht_opt$DENDROGRAM_PADDING <- unit(0, "in")
+    
+    if (is.null(hm.values)) {
+      hm.values <- c(min(pct.mat), max(pct.mat))
+    }
+    col_fun = circlize::colorRamp2(hm.values, hm.colors)
+    
+    if (label.pct) {
+      cell.mat <- pct.mat %>% round(digits = 3)
+      cell_fun <- function(j, i, x, y, width, height, fill) {
+        grid.text(cell.mat[i, j], x, y,
+                  gp = gpar(fontsize = 6))
+      }
+    } else {
+      cell_fun <- NULL
+    }
+    
+    hm.params <- list(matrix = pct.mat, col = col_fun,
+                      show_column_names = T, show_row_names = T,
+                      show_column_dend = show_column_dend, 
+                      cluster_columns = cluster_columns, 
+                      clustering_distance_columns = clustering_distance_columns, 
+                      clustering_method_columns = 'complete',
+                      cluster_rows = cluster_rows,
+                      clustering_distance_rows = clustering_distance_rows,
+                      row_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
+                      column_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
+                      column_dend_height = unit(0.1, "in"),
+                      column_dend_gp = gpar(lwd = 0.5),
+                      show_heatmap_legend = T,
+                      heatmap_legend_param = list(
+                        title = '', labels_gp = gpar(fontsize = 5), title_gp = gpar(fontsize = 6),
+                        legend_height = unit(0.3, "in"), grid_width = unit(0.05, "in"), gap = unit(2, "in")
+                      ),
+                      cell_fun = cell_fun,
+                      ...
+                      
+    )
+    
+    hm <- do.call(what = ComplexHeatmap::Heatmap, args = hm.params)
+    
+    if (!grepl(".pdf$", plot.out)) {
+      stop("plot.out must be pdf")
+    }
+
+    cairo_pdf(filename = plot.out, width = width, height = height, family = "Arial")
+    try({print(draw(hm))})
+    dev.off()
+    
+    ht_opt(RESET = T)
+    
+    invisible(hm)
+    
+  }
+  return(pct.mat)
+}

@@ -117,6 +117,7 @@ plot.mat.grouping <- function(mat, x.grouping, x.order,
 
 plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cluster_columns,
                                      show_column_names = T, show_row_names = F,
+                                     show_row_dend = F, show_column_dend = F,
                                      row.dist = "pearson", row.method = "complete", 
                                      col.dist = "pearson", col.method = "complete", plot.out, 
                                      width = 700, height = 700) {
@@ -140,7 +141,7 @@ plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cl
                          annotation_name_side = "top", which = "row", annotation_name_rot = 0, show_annotation_name = F)
 
   hm.params <- list(matrix = mat, show_column_names = show_column_names, show_row_names = show_row_names,
-                    show_row_dend = F, show_column_dend = F, 
+                    show_row_dend = show_row_dend, show_column_dend = show_column_dend, 
                     cluster_rows = cluster_rows, clustering_distance_rows = row.dist, 
                     clustering_method_rows = row.method,
                     cluster_columns = cluster_columns, clustering_distance_columns = col.dist, 
@@ -157,8 +158,75 @@ plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cl
       width = width, height = height, res = 100)
   try(print(draw(hm)))
   dev.off()
-  return()
+  invisible(hm)
 }
+
+plot.mat.rank.row <- function(mat, no.ranking = F, no.col.cluster = F,
+                              title = "", hm.colors = NULL,
+                              hm.values,
+                              show_column_names = T, show_row_names = F, show_column_dend = T,
+                              col.dist = "pearson", col.method = "complete", plot.out, 
+                              width = 2, height = 2, ...) {
+  fake.hm <- ComplexHeatmap::Heatmap(
+    matrix = mat, cluster_columns = T, clustering_distance_columns = col.dist,
+    clustering_method_columns = col.method)
+  
+  if (!no.col.cluster) {
+    col.order <- suppressWarnings(ComplexHeatmap::column_order(fake.hm))
+    mat <- mat[, col.order]
+  }
+  
+  if (!no.ranking) {
+    which.row.max <- apply(mat, 1, which.max)
+    row.order <- order(which.row.max)
+    mat <- mat[row.order, ]
+  }
+  
+  suppressMessages(extrafont::loadfonts())
+  ht_opt$HEATMAP_LEGEND_PADDING <- unit(0.1, "in")
+  ht_opt$DENDROGRAM_PADDING <- unit(0, "in")
+  
+  col_fun <- NULL
+  if (!is.null(hm.colors)) {
+    col_fun = circlize::colorRamp2(hm.values, hm.colors)
+  }
+  
+  
+  hm.params <- list(matrix = mat, col = col_fun,
+                    show_column_names = show_column_names, show_row_names = show_row_names,
+                    show_column_dend = show_column_dend, 
+                    cluster_columns = !no.col.cluster, clustering_distance_columns = col.dist, 
+                    clustering_method_columns = col.method,
+                    cluster_rows = F,
+                    row_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
+                    column_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
+                    column_dend_height = unit(0.1, "in"),
+                    column_dend_gp = gpar(lwd = 0.5),
+                    show_heatmap_legend = T,
+                    heatmap_legend_param = list(
+                      title = title, labels_gp = gpar(fontsize = 5), title_gp = gpar(fontsize = 6),
+                      legend_height = unit(0.3, "in"), grid_width = unit(0.05, "in"), gap = unit(2, "in")
+                    ),
+                    ...
+                    
+  )
+
+  hm <- do.call(what = ComplexHeatmap::Heatmap, args = hm.params)
+
+  if (!grepl(".pdf$", plot.out)) {
+    stop("plot.out must be pdf")
+  }
+  system(paste0("mkdir -p ", dirname(plot.out)))
+  
+  cairo_pdf(filename = plot.out, width = width, height = height, family = "Arial")
+  try({print(draw(hm))})
+  dev.off()
+  
+  ht_opt(RESET = T)
+  
+  invisible(hm)
+}
+
 
 peak.watch.kmo <- function(kmo, out.file.all, out.file.watch, n, seed = 42) {
   mp.df <- data.frame(cluster = kmo$cluster, peak = names(kmo$cluster)) %>% 

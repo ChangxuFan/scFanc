@@ -1006,7 +1006,7 @@ seurat.add.archr.embed <- function(so, ao, ao.embedding, embedding.name = NULL) 
   # rownames(embedding) <- sub(".+#", "", rownames(embedding))
   cells <- rownames(embedding)
   
-  look.up.table <- so@meta.data %>% mutate(cell = rownames(so@meta.data)) %>% select(cell, sample) %>% 
+  look.up.table <- so@meta.data %>% mutate(cell = rownames(so@meta.data)) %>% dplyr::select(cell, sample) %>% 
     # mutate (cell.ori = sub("_.+$", "", cell)) %>% 
     mutate(new.name = get.cell.names.seurat(so, style = "ArchR"))
   rownames(look.up.table) <- look.up.table$new.name

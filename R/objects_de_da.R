@@ -58,6 +58,8 @@ de.da.intersect <- function(pbl1, pbl2, name1, name2,
           o <- plyranges::join_overlap_inner(pros, peaks)
           
           if (!is.null(out.dir)) {
+            browser()
+            # merge rows that correspond to the same gene.
             utilsFanc::write.zip.fanc(
               o, out.file = paste0(out.dir, "/", root.name, "_", cluster, "_", direc, "_overlap.bed"), 
               bed.shift = T)

@@ -643,7 +643,8 @@ deseq2.xyplot <- function(pbl, publication = F,
                           pbl.soup = NULL, de.grid = NULL, de.grid.master.ident, # mostly not used anymore
                           comp.vec, comp.meta = NULL,
                           transformation = NULL, quantile.limit = NULL,
-                          no.highlight = F, highlight.by.overlap.gr = NULL, highlight.genes = NULL,
+                          no.highlight = F, highlight.by.overlap.gr = NULL,
+                          highlight.genes = NULL, highlight.color = NULL,
                           density.filter = NULL,
                           add.label = F, label.list = NULL,
                           plotly.label.all = F, plotly.highlight.only = T,
@@ -663,7 +664,8 @@ deseq2.xyplot <- function(pbl, publication = F,
     if (is.null(sub.height)) sub.height <- 1.6
     pt.size = 0.008
     pt.shape = 18
-    highlight.ptsize = 0.05
+    if (is.null(highlight.ptsize))
+      highlight.ptsize = 0.05
     theme.text.size <- 6
   } else {
     if (is.null(sub.width)) sub.width <- 4
@@ -811,18 +813,27 @@ deseq2.xyplot <- function(pbl, publication = F,
             label.values <- NULL
           }
           
+          color.map <- utilsFanc::gg_color_hue(2)
+          names(color.map) <- c("down", "up")
+          if (!is.null(highlight.color) && !is.null(highlight.genes)) {
+            df$direction <- "hl"
+            color.map <- highlight.color
+            names(color.map) <- "hl"
+          }
+          
           p <- xy.plot(df = df, x = comp.l$x, y = comp.l$y, transformation = transformation,
                        quantile.limit = quantile.limit, density.filter = density.filter,
                        highlight.var = highlight.var, highlight.values = de.df$gene,
                        label.var = label.var, label.values = label.values,
                        use.geom_text = T, 
                        plotly.var = "gene", highlight.color.var = "direction",
+                       color.map = color.map,
                        highlight.only = highlight.only,
                        plotly.label.all = plotly.label.all,
                        show.highlight.color.var = F, raster = T,
                        pt.size = pt.size, pt.shape = pt.shape, 
                        highlight.ptsize = highlight.ptsize,
-                       theme.text.size = theme.text.size,
+                       theme.text.size = theme.text.size, 
                        ...) +
             ggtitle(paste0(root.name, "  ", s2b.name.2))
           if (publication) {
@@ -1000,7 +1011,12 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
 
   pbl <- pbl[sapply(pbl, is.list)]
   s2b.names <- names(pbl)
-
+  
+  if (!is.null(gene.out.dir)) {
+    system(paste0("rm -rf ", gene.out.dir))
+    system(paste0("mkdir -p ", gene.out.dir))
+  }
+  
   pbl <- lapply(s2b.names, function(s2b.name) {
     s2b <- pbl[[s2b.name]]
     if (is.null(s2b[[res.slot]])) {
@@ -1054,7 +1070,6 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
                           down.genes = de.df %>% filter(log2FoldChange < 0) %>% pull(gene))
 
       if (!is.null(gene.out.dir)) {
-        system(paste0("mkdir -p ", gene.out.dir))
         lapply(c("de.genes", "up.genes", "down.genes"), function(type) {
           write(s2b[[summary.slot]][[type]], paste0(gene.out.dir, "/", s2b.name, "_", type, ".txt"), sep = "\n")
           if (grepl(":", s2b[[summary.slot]][[type]][1])) {
@@ -1097,7 +1112,8 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
     }) %>% Reduce(rbind, .)
     system(paste0("mkdir -p ", dirname(stats.file)))
     write.table(stats, stats.file, row.names = F, col.names = T, sep = "\t", quote = F)
-    deseq2.stats.barplot(stats.df = stats.file)
+    deseq2.stats.barplot(stats.df = stats.file, padj.cutoff = padj.cutoff, 
+                         log2fc.cutoff = log2fc.cutoff, topn.cutoff = use.topn.p)
   }
   return(pbl)
 }
@@ -1105,6 +1121,7 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
 
 
 deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters", "Clusters"),
+                                 padj.cutoff = NULL, log2fc.cutoff = NULL, topn.cutoff = NULL,
                                  plot.out = NULL) {
   if (is.character(stats.df)) {
     if (is.null(plot.out)) {
@@ -1125,6 +1142,10 @@ deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters
   p <- ggplot(stats.df, aes(x = name, y = n.genes, fill = type)) +
     geom_bar(stat = 'identity', position = "dodge") +
     geom_text(aes(label = n.genes), position = position_dodge(width = 0.8))
+  
+  title <- paste("padj", padj.cutoff, "log2fc", log2fc.cutoff, "topn", topn.cutoff)
+  p <- p + ggtitle(title)
+  
   if (!is.null(plot.out)) {
     dir.create(dirname(plot.out), showWarnings = F, recursive = T)
     ggsave(plot.out, p, width = 0.5 * length(unique(stats.df$name)) + 2, height = 5, dpi = 100)
@@ -1596,7 +1617,6 @@ deseq2.homer <- function(dds, fg.vec, n.bg.each = 25, no.replace = F,
     log.file <- paste0(homer.dir, "/stdout.log")
   else
     log.file <- NULL
-
   liteRnaSeqFanc::homer.motif.enrich(fg.bed = fg.bed, genome = genome, outdir = homer.dir, bg.bed = bg.bed,
                                      size = size, thread = thread, denovo = denovo, other.params = other.params,
                                      homer.path = homer.path, find.motifs.path = find.motifs.path, run = run,
@@ -1653,7 +1673,6 @@ a2bl.homer.pipe <- function(a2bl, work.dir, slot, summ.slot = "summary", # behav
 
         write.table(fg.df, paste0(prep.dir, "/fg.tsv"), sep = "\t", quote = F, row.names = F, col.names = T)
         fg.vec <- fg.df$gene
-
         deseq2.homer(dds = a2b$dds, fg.vec = fg.vec, n.bg.each = n.bg.each, no.replace = no.replace,
                      samples.for.bg = samples.for.bg,
                      scatter.xy.df = scatter.xy.df, scatter.meta = scatter.meta,
@@ -2784,6 +2803,29 @@ de.write.xls <- function(de, cluster.alias = NULL,
   })
 }
 
+de.write.xls.all.genes <- function(de, cluster.alias = NULL,
+                         slot = "res.exp",
+                         out.file) {
+  # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
+  system(paste0("rm -rf ", out.file))
+  dir.create(dirname(out.file), showWarnings = F, recursive = T)
+  lapply(de, function(s2b) {
+    if (!is.null(cluster.alias)) {
+      cluster <- cluster.alias %>% dplyr::filter(name == s2b$root.name) %>%
+        dplyr::pull(alias)
+      if (length(cluster) != 1) {
+        stop("length(cluster) != 1")
+      }
+    } else {
+      cluster <- s2b$root.name
+    }
+    df <- s2b[[slot]]
+    xlsx::write.xlsx(x = df, file = out.file, sheetName = cluster,
+                     append = T, row.names = F, col.names = T)
+  })
+}
+
+
 de.write.summary <- function(de, slot, out.dir) {
   bDa <- grepl(":", rownames(de[[1]]$bulk.mat)[1])
   stats <- lapply(de, function(s2b) {
@@ -3064,8 +3106,12 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
           df[, value][df[, value] > violin.ceiling] <- violin.ceiling
           df[, value][df[, value] < violin.floor] <- violin.floor
           
-          p <- ggplot(df, aes_string(x = "quant", y = value)) 
+          n.stats <- df[, c("quant", "motif")] %>% table()
+          n.out <- paste0(plot.dir, "/", root.name, "_", df$cluster[1], "_", df$comp[1], "_n_numbers.csv")
+          dir.create(dirname(n.out), showWarnings = F, recursive = T)
+          write.csv(n.stats, n.out)
           
+          p <- ggplot(df, aes_string(x = "quant", y = value)) 
           if (publication) {
             if (bViolin) {
               p <- p + geom_violin()
@@ -3793,8 +3839,17 @@ de.motif.n <- function(de, peak.motif.df,
       
       # Inner join seems wrong. However, the lost genes will be later "reclaimed"
       # using tidyr::comlete.
-      j <- dplyr::inner_join(df, gene.motif.df, by = "gene")
+      j <- dplyr::inner_join(df, gene.motif.df, by = "gene", relationship = "many-to-many")
       
+      # df1 <- data.frame(group = c("a", "b", "c"), gene = c("gene1", "gene2", "gene2"))
+      # df2 <- data.frame(gene = c("gene1","gene2", "gene2"), motif = c("motif1", "motif1", "motif2"))
+      # Browse[1]>       inner_join(df1, df2, by = "gene")
+      # group  gene  motif
+      # 1     a gene1 motif1
+      # 2     b gene2 motif1
+      # 3     b gene2 motif2
+      # 4     c gene2 motif1
+      # 5     c gene2 motif2
       if (write.details) {
         dir.create(dirname(prefix), showWarnings = F, recursive = T)
         write.table(j %>% dplyr::arrange(motif), file = paste0(prefix, "_details.tsv"),
@@ -4792,7 +4847,7 @@ de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2",
   write.table(df, paste0(tools::file_path_sans_ext(out.file), ".tsv"), 
               sep = "\t", col.names = T, row.names = F, quote = F)
   
-  df$type <- factor(df$type, levels = c(down.name, up.name))
+  df$type <- factor(df$type, levels = c(up.name, down.name))
   df$cluster <- factor(df$cluster, levels = rev(names(de)))
   
   p <- ggplot(df, aes(x = n, y = cluster)) +
@@ -4812,3 +4867,4 @@ de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2",
   ggsave(out.file, p, width = width, height = height, device = cairo_pdf)
   invisible(p)
 }
+

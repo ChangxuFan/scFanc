@@ -67,9 +67,13 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
       htmltools::save_html(html = doc, file = plot.out)
     } else {
       n.row <- ceiling(n.sub/n.col)
+      if (!pdf.use.cairo) {
+        suppressMessages(suppressWarnings(extrafont::loadfonts()))
+      }
       if (pdf.by.row) {
         layout_matrix <- suppressWarnings(matrix(1:length(plot.list), nrow = n.row, byrow = TRUE))
         layout_matrix[duplicated(as.vector(layout_matrix))] <- NA
+        # Somehow this part will error out unless you have plotted something during this session
         p <- gridExtra::marrangeGrob(plot.list, layout_matrix = layout_matrix, 
                                      nrow = n.row, ncol = n.col,
                                      top = NULL)
@@ -236,7 +240,10 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
                             split.by=NULL, split.order = NULL, use.split.as.title = F,
                             highlight.list = NULL, is.motif = F, motif.species, motif.map = ARCHETYPE.MAP,
                             label = T, label.size=4, b2m = T, italic.title = T,
-                            n.split=1, ident = "seurat_clusters", violin = F, ymax = NULL, ymin = 0,
+                            hide.legend = F,
+                            n.split=1, ident = "seurat_clusters", 
+                            violin = F, violin.adjust = 1, violin.no.noise = T, violin.remove.x = F, violin.color.map = NULL,
+                            ymax = NULL, ymin = 0,
                             plot.out = NULL, root.name = NULL,
                             to.human = F, limits = NULL, return.list = F, pt.size = 0.05, page.limit = 200, n.col = NULL,
                             raster = F, auto.adjust.raster.pt.size = T,
@@ -354,8 +361,11 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
       mat <- Seurat::GetAssayData(object = obj, slot = "data", assay = assay)
       vec <- mat[m, ] %>% as.vector()
     }
-    data.min <- min(vec)
-    data.max <- max(vec)
+    
+    if (!(m %in% colnames(obj@meta.data) && !is.numeric(obj@meta.data[, m]))) {
+      data.min <- min(vec)
+      data.max <- max(vec)
+    }
     
     if (is.null(limits)) {
       if (is.numeric(vec)) {
@@ -370,11 +380,40 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
     if (violin == T) {
       if (!is.null(cells))
         obj <- obj[, cells]
-      p.sub <- VlnPlot(obj, m, split.by = split.by,
+      p.sub <- VlnPlot.fanc(obj, m, split.by = split.by, adjust = violin.adjust,
                        # cols = c("red", "orange", "blue", "green", "gray", "yellow"),
-                       split.plot = F, y.max = ymax, pt.size = pt.size)
+                       split.plot = F, y.max = ymax, pt.size = pt.size, no.noise = violin.no.noise,
+                       cols = violin.color.map)
       if (add.median == T)
         p.sub <- p.sub + stat_summary(fun=median, geom="point", size=3, color="red")
+      
+      if (publication) {
+        p.sub <- p.sub + 
+          theme(plot.title = element_text(size=6, margin = margin(b = -0.02, unit = "in"), 
+                                          face = ifelse(italic.title, 'italic', 'plain'), family = "Arial"),
+                text = element_text(size = 5,  color = "black", family = "Arial"), 
+                axis.title= element_blank(),
+                axis.line = element_line(size = 0.2),
+                axis.ticks = element_line(size = 0.2),
+                axis.text = element_text(size = 5,  color = "black", family = "Arial"),
+                plot.margin = margin(t = 0.01, r = 0.12, b = 0, l =0, unit = "in"),
+                legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"), 
+                legend.box.margin = margin(t = -0.12, r = -0.1, b = 0, 
+                                           l = ifelse(!is.null(split.by) && !use.split.as.title, -0.3, -0.15),
+                                           unit = "in"), 
+                legend.background = element_blank(), 
+                legend.spacing = unit(0.02, "in"), legend.key.size = unit(0.05, "in"), 
+                legend.box = "vertical", legend.title = element_text(size = 5, family = "Arial"),
+                legend.text = element_text(size = 5, family = "Arial")
+          )
+        if (violin.remove.x) {
+          p.sub <- p.sub + theme(axis.text.x = element_blank(),
+                                 axis.ticks.x = element_blank())
+        }
+        if (hide.legend) {
+          p.sub <- p.sub + theme(legend.position = "none")
+        }
+      }
       p.sub <- list(p.sub)
     } else {
       print(m)
@@ -407,9 +446,14 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
         #
         #   limits <- c(0, scale.max)
         # }
+
         color.map <- c(data.min, limits, data.max)
-        
-        # color.limits <- limits
+        range <- data.max - data.min
+        color.map[2] <- color.map[2] + 0.001 * range
+        color.map[3] <- color.map[3] - 0.001 * range
+        # There can't be ties. ggplot2 will generate a bug if there are ties. 
+        # Doing the above to get rid of ties
+
         p.sub <- lapply(p.sub, function(psi) {
           if (use.split.as.title) {
             tmp <- ggplot2::ggplot_build(psi)
@@ -466,6 +510,9 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
                     panel.border = element_blank()
               ) +
               guides(color = guide_colourbar(barwidth = 0.3, barheight = 2)) 
+            if (hide.legend) {
+              psi <- psi + theme(legend.position = "none")
+            }
             
           } else {
             psi <- suppressMessages(psi +
@@ -849,7 +896,9 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
                       outfile = NULL, return.df = F,
                       label.var = NULL, labels = NULL, label.size = 4,
                       pt.size = 0.5,
-                      add.h.line = NULL, add.v.line = NULL, title = NULL) {
+                      add.h.line = NULL, add.v.line = NULL, title = NULL,
+                      height = 4, width = 4,
+                      publication = F) {
   if (!is.data.frame(df))
     df <- as.data.frame(df)
   df.core <- df[, ! colnames(df) %in% vars, drop = F]
@@ -871,8 +920,12 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
   }
   p <- ggplot(df.melt, aes(x = rank, y = value, color = type)) +
     geom_point(size = pt.size, alpha = 0.3) +
-    xlim(x.limit) + ylim(y.limit) +
     theme_classic()
+  if (!is.null(x.limit)) 
+    p <- p + xlim(x.limit)
+  if (!is.null(y.limit))
+    p <- p + ylim(y.limit)
+  
   if (!is.null(label.var)) {
     label.data <- df.melt
     if (!is.null(labels))
@@ -896,8 +949,17 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
     p <- p + ggtitle(title)
 
   p <- p + theme(aspect.ratio = 1)
+  
+  if (publication) {
+    p <- ggrastr::rasterize(p, dpi=300)
+    p <- p %>% utilsFanc::theme.fc.1(italic.x = F)
+    p <- p + theme(
+      legend.position = "none"
+    )
+  }
+  
   if (!is.null(outfile)) {
-    trash <- wrap.plots.fanc(plot.list = list(p), plot.out = outfile)
+    trash <- wrap.plots.fanc(plot.list = list(p), plot.out = outfile, sub.height = height, sub.width = width)
   }
   if (return.df == T)
     return(df.melt)
@@ -935,7 +997,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
                     theme.text.size = NULL, pt.size = 0.05, pt.shape = 19, color.var = NULL, pt.color = "grey50",
                     density.filter = NULL, density.filter.2sided = F,
                     color.density = F, show.color.var = F,
-                    highlight.var=NULL, highlight.values=NULL, highlight.color.var = NULL,
+                    highlight.var=NULL, highlight.values=NULL, highlight.color.var = NULL, color.map = NULL,
                     show.highlight.color.var = F, highlight.ptsize = NULL,
                     highlight.only = F,
                     label.var = NULL, label.values = NULL, italic.label = F, 
@@ -1088,6 +1150,10 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
     p <- p + geom_point(data = df.h, aes_string(x = x, y = y, fill = highlight.color.var,text = plotly.var),
                         size = 10 * highlight.ptsize, stroke = 0, shape = 21,
                         show.legend=show.highlight.color.var)
+    if (!is.null(color.map)) {
+      p <- p + scale_fill_manual(values = color.map)
+    }
+    
     if (raster == T) {
       p <- ggrastr::rasterize(p, dpi=300)
     }
@@ -1735,6 +1801,7 @@ umap.fanc <- function(obj,
                       highlight.mode = F, 
                       # common
                       remove.outlier = c(0, 0, 0, 0),
+                      reverse.point.order = F,
                       split.by = NULL, splits = NULL,
                       polygon.df = NULL, # polygon untested
                       cols = NULL, pt.size = 0.05, pt.shape = 18,
@@ -1820,6 +1887,11 @@ umap.fanc <- function(obj,
   n.splits <- df$split %>% unique() %>% length()
   pl <- df %>% split(f = df$split) %>% 
     lapply(function(df) {
+      if (reverse.point.order) 
+        df <- df[nrow(df):1,]
+      if (label.groups) {
+        if (!is.factor(df$group)) stop("groups must be factorized for label.groups to work  ")
+      }
       p <- ggplot(df, aes_string(x = "UMAP_1", y = "UMAP_2")) +
         ggrastr::rasterise(geom_point(aes_string(color = "group", fill = "group"), 
                    size = pt.size, shape = pt.shape, stroke = 0.05), dpi = 500)
@@ -2042,5 +2114,20 @@ plot.line <- function(df, x, x.include = NULL, y, group.by, groups = NULL,
     ggsave(paste0(out.dir, "/", root.name, ".pdf"), p, device = cairo_pdf, width = n.x, height = 2)
   }
   invisible(p)
+}
+
+plot.confusion.mat <- function(mat, show_column_dend = F, 
+                               no.col.cluster = T, no.row.rank = T,
+                               plot.out,
+                               width = 2, height = 2, ...) {
+  rows <- rownames(mat)
+  mat <- diag(1/rowMax(mat)) %*% mat
+  rownames(mat) <- rows
+  plot.mat.rank.row(mat = mat, no.ranking = no.row.rank, no.col.cluster = no.col.cluster,
+                    hm.colors = c("midnightblue", "yellow"),
+                    hm.values = c(0, 1), show_column_names = T, show_row_names = T, 
+                    show_column_dend = show_column_dend, plot.out = plot.out,
+                    width = width, height = height, row_names_side = "left", ...)
+  return()
 }
 

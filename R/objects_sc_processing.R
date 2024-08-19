@@ -37,7 +37,9 @@ sc.qc.construct.so <- function(sample.info, project.name, mt.pattern,
         }
         so <- CreateSeuratObject(so, project = project.name)
       }
-      so <- so[so@assays$RNA@counts %>% as.matrix() %>% apply(1, function(x) return(sum(x>0) >= min.cell.w.gene)),]
+      # so <- so[so@assays$RNA@counts %>% as.matrix() %>% apply(1, function(x) return(sum(x>0) >= min.cell.w.gene)),]
+      so <- so[rowSums(so@assays$RNA@counts > 0) >= min.cell.w.gene, ]
+      
       # have to add additional assays after filtering genes
       # when you filter genes, all the other assays will magically disappear...
       if (length(add.assays) > 0) {
@@ -377,6 +379,7 @@ sct.int.pipe <- function(sol, n.int.features, n.threads, outfile= NULL, referenc
 }
 
 cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
+                         keep.cell.names = F,
                          vars.to.regress = NULL,
                          pc.run = 60, pc.dim = 1:30, 
                          run.pca = T,
@@ -439,7 +442,9 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
     # if (assay != "RNA")
     #   DefaultAssay(soi) <- "SCT"
     
-    soi <- RenameCells(soi, new.names = get.cell.names.seurat(soi, style = "ArchR"))
+    if (!keep.cell.names)
+      soi <- RenameCells(soi, new.names = get.cell.names.seurat(soi, style = "ArchR"))
+    
     if (save.rds == T)
       saveRDS(soi, paste0(work.dir, "/soi.Rds"), compress = F)
     

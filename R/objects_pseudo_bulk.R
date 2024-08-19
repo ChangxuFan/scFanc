@@ -250,7 +250,6 @@ ao.2.bulk <- function(ao=NULL, root.name, cell.list = NULL, gr = NULL, gr.sample
       #   getCellColData()
       # }
     }
-
     dir.create(cell.prep.dir, recursive = T, showWarnings = F)
     saveRDS(cell.list, paste0(cell.prep.dir, "/", root.name, "_cell.list.Rds"))
     gr.sample.cols <- names(cell.list)
@@ -277,7 +276,16 @@ ao.2.bulk <- function(ao=NULL, root.name, cell.list = NULL, gr = NULL, gr.sample
   }
 
   # from gr to DESeq2 format:
-  df <- gr %>% `names<-`(NULL) %>% as.data.frame() %>% .[, c("seqnames", "start", "end", gr.sample.cols)] %>%
+  df <- gr %>% `names<-`(NULL) %>% as.data.frame()
+  if (any(grepl("^\\d", gr.sample.cols))) {
+    cat(paste0("Some sample names start from a number.\n",
+                 "Trying to make this work by removing the 'X' from the beginning the the column names of gr\n"))
+    colnames(df) <- sub("^X(\\d)", "\\1", colnames(df))
+  }
+  
+  utilsFanc::check.intersect(gr.sample.cols, "gr.sample.cols", colnames(df), "colnames(df)")
+  
+  df <- df %>% .[, c("seqnames", "start", "end", gr.sample.cols)] %>%
     mutate(peak = paste0(seqnames, ":", start, "-", end))
   rownames(df) <- df$peak
   mat <- df[, gr.sample.cols] %>% as.matrix()
@@ -1116,13 +1124,15 @@ aggregate.fanc <- function(mat, se.assay.name = NULL, margin, groupings, na.rm =
   } else if (margin != 1) {
     stop("margin has to be 1 or 2")
   }
-
-  groupings <- groupings %>% .[names(.) %in% rownames(mat)]
+  utilsFanc::check.intersect(names(groupings), "names(groupings)",
+                             rownames(mat), paste0(ifelse(margin == 2, "col", "row"), "names(mat)"))
+  # groupings <- groupings %>% .[names(.) %in% rownames(mat)]
   mat <- mat[names(groupings), ] # important step that syncs groupings and the mat
   if (binarize == T) {
     mat[mat > 0] <- 1
     mat[mat <= 0] <- 0
   }
+
   aggr <- Matrix.utils::aggregate.Matrix(mat, groupings = groupings, fun = "sum")
   if (sort == T) {
     aggr <- aggr[gtools::mixedsort(rownames(aggr)),]

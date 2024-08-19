@@ -91,7 +91,6 @@ bg.assess <- function(mat, fg.vec, bg.vec = NULL,
   gene.list <- gene.list[!sapply(gene.list, is.null)]
   pl <- scatter.xy.df %>% unique() %>% split(., f = 1:nrow(.)) %>% 
     lapply(function(comp) {
-      # comp: comparison
       pl <- lapply(names(gene.list), function(type) {
         genes <- gene.list[[type]]
         
@@ -263,6 +262,77 @@ gsea.fanc <- function(rnk.vec, gmt.vec, out.dir, thread.rnk=1, thread.gmt=1, n.p
   return(res)
 }
 
+fgsea.fanc <- function(rnk, gmt, nperm = NULL) {
+  rank.df <- read.table(rnk, header = F)
+  ranks <- rank.df$V2
+  names(ranks) <- rank.df$V1
+  ranks <- sort(ranks)
+  
+  genesets <- clusterProfiler::read.gmt(gmtfile = gmt)
+  genesets <- split(genesets$gene, f = genesets$ont)
+  params <- list(pathways = genesets, 
+                 stats    = ranks,
+                 minSize  = 15,
+                 maxSize  = 500, 
+                 gseaParam = 1)
+  
+  if (!is.null(nperm))
+    params$nperm <- nperm
+  
+  res <- do.call(fgsea::fgsea, params)
+  
+  return(list(ranks = ranks, genesets = genesets, res = res))
+}
+
+fgsea.top.genesets <- function(fgsea.res, n = 10, direction = "up", padj.cutoff = NULL) {
+  if (!is.null(padj.cutoff)) {
+    fgsea.res <- fgsea.res %>% filter(padj < padj.cutoff)
+  }
+  
+  if (direction == "up") {
+    fgsea.res <- fgsea.res %>% filter(ES > 0)
+    pathways <- fgsea.res %>% arrange(desc(NES)) %>% pull(pathway) %>% .[1:n]
+  } else if (direction == "down") {
+    fgsea.res <- fgsea.res %>% filter(ES < 0)
+    pathways <- fgsea.res %>% arrange(NES) %>% pull(pathway) %>% .[1:n]
+  } else if (direction == "both"){
+    pathways <- fgsea.res %>% arrange(desc(abs(NES))) %>% pull(pathway) %>% .[1:n]
+  } else {
+    stop(paste0("direction has to be up or down"))
+  }
+  return(pathways)
+}
+
+fgsea.plot.top.pathways <- function(fg, # returned by fgsea.fanc()
+                                    n = 20, out.dir, root.name = NULL,
+                                    width = 5, height = 3) {
+  if (is.null(root.name)) {
+    root.name <- basename(out.dir)
+  }
+  top.pathways <- lapply(c("up", "down"), function(direction) {
+    fgsea.top.genesets(fgsea.res = fg$res, n = 20, direction = direction)
+  })
+  
+  names(top.pathways) <- c("up", "down")
+
+  lapply(c("up", "down"), function(direction) {
+    label.style <- list(size = 6)
+    p <- fgsea::plotGseaTable(pathways = fg$genesets[top.pathways[[direction]]],
+                              stats = fg$ranks, 
+                              fgseaRes = fg$res, 
+                              gseaParam=1, 
+                              colwidths = c(7, 3, 0.8, 1.2, 1.2),
+                              pathwayLabelStyle = list(size = 5), 
+                              headerLabelStyle = label.style, 
+                              valueStyle = label.style, axisLabelStyle = label.style)
+    dir.create(out.dir, showWarnings = F, recursive = T)
+    ggsave(paste0(out.dir, "/", root.name, "_top20_", direction,".pdf"), p, 
+           device = cairo_pdf, height = height, width = width)
+  return()  
+  })
+  return()
+}
+
 de.2.gsea.txt <- function(pbl, pheno.col, to.upper = T, grep.exclude = NULL,
                           out.dir, root.name = NULL) {
   if (is.null(root.name)) {
@@ -297,7 +367,6 @@ de.2.gsea.txt <- function(pbl, pheno.col, to.upper = T, grep.exclude = NULL,
   })
   return()
 }
-
 
 de.2.rnk <- function(de.grid = NULL, pbl = NULL, microarray.mode = F,
                      pbl.slot = "res", 
@@ -498,7 +567,7 @@ de.2.gmt <- function(de, slot = "summary", directions = c("up", "down"),
 
 de.reciprocal.gsea <- function(des, slot = "summary", top.n = 12000,
                                out.dir, directions = c("up", "down"),
-                               fgsea.plot = T,
+                               fgsea.plot = T, fgsea.width = 1.5, fgsea.height = 1,
                                run = F, force = F, n.par.de = 1) {
   # des <- list(my = de1, geo = de2)
   # by default reciprocal: each de in des will be used to do gsea against the 
@@ -512,7 +581,7 @@ de.reciprocal.gsea <- function(des, slot = "summary", top.n = 12000,
   utilsFanc::check.dups(names(des), "names(des)")
   
   if (fgsea.plot) {
-    required.fields <- c("gene.set.name.display",
+    required.fields <- c("gene.set.name.display.up", "gene.set.name.display.down",
                          "rank.name.display",
                          "up.name.display", "down.name.display")
     
@@ -539,11 +608,9 @@ de.reciprocal.gsea <- function(des, slot = "summary", top.n = 12000,
                gmt.name = ref.name)$gmt
     }) %>% unlist()
     names(gmts) <- names(des.ref)
-    
     rnk.vec <- de.2.rnk(pbl = de.query, out.dir = paste0(out.dir, "/rnk/"),
                         pbl.topn = top.n, pbl.samples = NULL, microarray.mode = T)
     # use the plot engine from fgsea:
-
     if (fgsea.plot) {
       lapply(rnk.vec, function(rnk) {
         query.cluster <- basename(rnk) %>% sub("cluster_", "", .) %>% 
@@ -555,19 +622,25 @@ de.reciprocal.gsea <- function(des, slot = "summary", top.n = 12000,
           de.ref <- des[[ref.de.name]]
           lapply(de.ref, function(s2b.ref) {
             lapply(directions, function(direction) {
+              gmt.gene.set.name <- paste0(s2b.ref$root.name, "_", direction)
+              if (length(gmt.get.gs(gmt = gmt, gs.names = gmt.gene.set.name)) < 1) {
+                print(paste0("Skipping: ", gmt.gene.set.name, "; not found in gmt"))
+                return()
+              }
               plot.out <- paste0(
                 out.dir, "/plot_curve/", 
                 "q",query.name, "_", query.cluster,
                 "_r", ref.de.name, "_", 
                 s2b.ref$root.name, "_", direction, ".pdf")
               gsea.plot.curve(gmt.file = gmt,
-                              gmt.gene.set.name = paste0(s2b.ref$root.name, "_", direction),
-                              gene.set.name.display = paste0("Gene Set: \n", direction, s2b.ref$fgsea.meta$gene.set.name.display),
+                              gmt.gene.set.name = gmt.gene.set.name,
+                              gene.set.name.display = s2b.ref$fgsea.meta[[paste0("gene.set.name.display.", direction)]],
                               rank.name.display = s2b.query$fgsea.meta$rank.name.display,
                               up.name.display = s2b.query$fgsea.meta$up.name.display, 
                               down.name.display = s2b.query$fgsea.meta$down.name.display,
                               rnk = rnk,
-                              plot.out = plot.out)
+                              plot.out = plot.out, 
+                              width = fgsea.width, height = fgsea.height, calculate.p = T)
             })
           })
         })
@@ -1204,11 +1277,12 @@ homer.core.extract <- function(paths, motifs, use.regex = F, col.num = 3,
         value <- df %>% .[.$V1 == motif, col.num]
       }
     }
-    
-    if (length(value) != 1 ) {
-      stop(paste0("error in homer.core.extract at motif ", motif, ": length(value) != 1"))
+    if (length(value) > 1 ) {
+      stop(paste0("error in homer.core.extract at motif ", motif, ": length(value) > 1"))
     }
-      
+    if (length(value) == 0 ) {
+      stop(paste0("error in homer.core.extract at motif ", motif, ": length(value) == 0"))
+    } 
     return(value)
   }) %>% `names<-`(NULL)
   return(value)
@@ -1427,6 +1501,7 @@ gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name,
                             rnk, # rnk file, you know how it works...
                             gene.set.name.display = "gene_set", # the title of the plot
                             gseaParam = 1, # the exponent for score calculation
+                            calculate.p = F,
                             rank.name.display = "rank", # x axis of the plot
                             up.name.display = "up", # something like KO > WT
                             down.name.display = "down", # something like KO < WT
@@ -1451,6 +1526,10 @@ gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name,
   pathway <- sort(pathway)
   gseaRes <- fgsea::calcGseaStat(statsAdj, selectedStats = pathway, 
                                  returnAllExtremes = TRUE)
+  if (calculate.p) {
+    gsea.stats <- fgsea::fgsea(pathways = list(pathway = genes), 
+                          stats = stats, gseaParam = gseaParam)
+  }
   bottoms <- gseaRes$bottoms
   tops <- gseaRes$tops
   n <- length(statsAdj)
@@ -1541,24 +1620,29 @@ gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name,
              size = 10* ticksSize, alpha = 1, color = tick.color) + 
     annotate("text", x = xmin + 0.05 * xrange, y = updown.min, label = "Overlapping Gene Set",
              hjust = 0, vjust = 1.1, size = 0.36 * 5,
-             family = "Arial") +
-    coord_cartesian(ylim = c(tick.min , ymax),clip="off") +
+             family = "Arial")
+  
+  p <- p +  coord_cartesian(ylim = c(tick.min , ymax),clip="off") +
     labs(y = "Enrichment Score", title = gene.set.name.display) +
     theme_bw(base_size = 6, base_family = "Arial") + 
     theme(panel.border = element_blank(), panel.grid.minor = element_blank(),
           plot.title = element_text(size = 6, family = "Arial", hjust = 0),
-          plot.margin = margin(t = 0.01, b = 0.3 * height, r = 0.1, l = 0.01, unit = "in"),
+          plot.margin = margin(t = 0.01, b = 0.3 * height, r = 0, l = 0.01, unit = "in"),
           axis.title.x = element_blank(),
           axis.text.x = element_blank(),
           axis.ticks.x = element_blank(),
           axis.text.y = element_text(size = 6, family = "Arial"),
           axis.title.y = element_text(size = 6, family = "Arial", vjust = 0))
   
-  
-  
   if (!is.null(plot.out)) {
     dir.create(dirname(plot.out), showWarnings = F, recursive = T)
     ggsave(plot.out, p, width = width, height = height, units = "in", device = cairo_pdf)
+    if (calculate.p) {
+      stat.file <- paste0(tools::file_path_sans_ext(plot.out), "_stats.txt")
+      gsea.stats$leadingEdge <- gsea.stats$leadingEdge[[1]] %>% paste0(collapse = ",")
+      write.table(as.data.frame(gsea.stats), stat.file, sep = "\t", quote = F, 
+                  col.names = T, row.names = F)
+    }
   }
   
   invisible(p)
