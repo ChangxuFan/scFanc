@@ -2131,3 +2131,80 @@ plot.confusion.mat <- function(mat, show_column_dend = F,
   return()
 }
 
+plot.single.cell.exp.mat <- function(so, assay, layer, binarize = T, cells, metas = NULL, gene.list, 
+                                     plot.out, width = 8, height = 8,
+                                     show.row.names = T, show.column.names = F, annotate.rows = F, ...) {
+  # gene.list = list(myeloid= c(gene1, gene2), lymphoid = c(gene3, gene4))
+  mat <- Seurat::GetAssayData(so, assay = assay, layer = layer)
+  utilsFanc::check.intersect(cells, "cells", colnames(mat), paste0("assay ", assay, " and layer ", layer))
+  utilsFanc::check.intersect(unlist(gene.list), "genes", rownames(mat), paste0("assay ", assay, " and layer ", layer))
+  utilsFanc::check.intersect(metas, "metas", colnames(so@meta.data), "colnames(meta.data)")
+  mat <- mat[unlist(gene.list), cells]
+  
+  if (binarize) {
+    mat[mat > 0] <- 1
+    mat[mat <= 0] <- 0
+  } else {
+    stop("only binarize == T has been developed")
+  }
+  
+  # suppressMessages(extrafont::loadfonts())
+  # ht_opt$HEATMAP_LEGEND_PADDING <- unit(0.1, "in")
+  # ht_opt$DENDROGRAM_PADDING <- unit(0, "in")
+  
+  
+  col_fun <- circlize::colorRamp2(c(0, 1), c("white", "black"))
+  hm.param <- list(matrix = as.matrix(mat), col = col_fun,
+                   show_row_names = show.row.names, show_column_names = show.column.names,
+                   # row_names_gp = gpar(fontsize = 6), 
+                   # heatmap_legend_param = list(
+                   #   title = "", labels_gp = gpar(fontsize = 5), title_gp = gpar(fontsize = 6),
+                   #   legend_height = unit(0.3, "in"), grid_width = unit(0.05, "in"), gap = unit(2, "in")
+                   # ),
+                   column_order = cells, ...)
+  
+  if (!is.null(metas)) {
+    
+    anno.df <- so@meta.data[cells, metas, drop = F]
+    colors <- lapply(anno.df, function(meta) {
+      meta <- unique(meta)
+      color.map <- utilsFanc::gg_color_hue(length(meta))
+      names(color.map) <- meta %>% as.character()
+      return(color.map)
+    })
+    legends <- lapply(anno.df, function(x) return(list(title = "")))
+    sa <- ComplexHeatmap::HeatmapAnnotation(df = anno.df, col = colors, 
+                                            annotation_legend_param = legends)
+    
+    hm.param[["top_annotation"]] <- sa
+  }
+  
+  hm.param[["row_order"]] <- unlist(gene.list)
+  
+  if (annotate.rows) {
+    stop("annotate.rows have not been well developed")
+    row.anno <- rep(names(gene.list), sapply(gene.list, length))
+    row.anno <- data.frame(gene.type = row.anno)
+    
+    ha <- ComplexHeatmap::HeatmapAnnotation(
+      df = row.anno, annotation_name_side = "top", which = "row", 
+      annotation_name_rot = 0, show_annotation_name = F)
+    hm.param[["left_annotation"]] <- ha
+    
+  }
+
+  hm <- do.call(ComplexHeatmap::Heatmap, hm.param)
+  if (!grepl(".pdf$", plot.out)) {
+    stop("plot.out must be pdf")
+  }
+  system(paste0("mkdir -p ", dirname(plot.out)))
+  
+  cairo_pdf(filename = plot.out, width = width, height = height)
+  try({print(hm)})
+  dev.off()
+  
+  ht_opt(RESET = T)
+  
+  invisible(mat)
+}
+
