@@ -43,10 +43,13 @@ count.by.cluster <- function(so,work.dir= NULL, root.name = NULL, meta="seurat_c
     if (i == 1) 
       group.name <- paste0(group.by, "_all")
     df <- meta.df %>% .[.[,group.by] %in% groups.list[[i]], meta] %>% table() %>% as.data.frame()
-    if (mixedSort == T) {
-      df <- df[gtools::mixedorder(df$cluster), ]
-    }
+    
     colnames(df) <- c("cluster", "freq")
+    
+    if (mixedSort == T) {
+      df <- df[gtools::mixedorder(as.character(df$cluster)), ]
+    }
+    
     df$frac <- df$freq/sum(df$freq)
     sum <- df
     sum$cluster <- NULL

@@ -2195,7 +2195,8 @@ de.non.de <- function(pbl, out.dir, fc.th = 1.1, slot = "res.exp",
   return()
 }
 
-da.pileup.DAR <- function(summ.dir, clusters, bw.dir,
+da.pileup.DAR <- function(summ.dir, clusters, 
+                          bws = NULL, bw.dir, use.all.bws = F,
                           n.peaks = 1000, seed = 42,
                           threads.clusters = 1, threads.each = 6,
                           out.dir) {
@@ -2214,16 +2215,25 @@ da.pileup.DAR <- function(summ.dir, clusters, bw.dir,
 
   names(peaks) <- clusters
 
-  bws <- lapply(clusters, function(cluster) {
-    glob <- paste0(bw.dir, "/", cluster, "*")
-    bws <- Sys.glob(glob)
-    if (length(bws) < 1) {
-      stop(paste0("glob failed for: ", glob))
-    }
-    return(bws)
-  })
+  if (!is.null(bws)) {
+    bws <- lapply(clusters, function(x) return(bws))
+  } else {
+    bws <- lapply(clusters, function(cluster) {
+      if (use.all.bws)
+        glob <- paste0(bw.dir, "/*.bw")
+      else
+        glob <- paste0(bw.dir, "/", cluster, "*")
+      
+      bws <- Sys.glob(glob)
+      if (length(bws) < 1) {
+        stop(paste0("glob failed for: ", glob))
+      }
+      return(bws)
+    })
+  }
+  
   names(bws) <- clusters
-
+  
   utilsFanc::safelapply(clusters, function(cluster) {
     deeptools.refpoint(bw.vec = bws[[cluster]], regions.vec = peaks[[cluster]],
                        threads = threads.each, out.dir = out.dir, root.name = cluster)
@@ -2772,10 +2782,12 @@ da.footprint <- function(da, slot = "summary", direction = c("up", "down"),
 
 de.write.xls <- function(de, cluster.alias = NULL,
                          summ = "summary", slot = "res.exp",
-                         cols = c("log2FoldChange", "padj"),
-                         out.file) {
+                         cols = "all",
+                         out.file, 
+                         append = F, prefix = NULL) {
   # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
-  system(paste0("rm -rf ", out.file))
+  if (!append)
+    system(paste0("rm -rf ", out.file))
   dir.create(dirname(out.file), showWarnings = F, recursive = T)
   lapply(de, function(s2b) {
     if (!is.null(cluster.alias)) {
@@ -2787,8 +2799,14 @@ de.write.xls <- function(de, cluster.alias = NULL,
     } else {
       cluster <- s2b$root.name
     }
-    df <- s2b[[slot]][, c("gene", cols)]
-    lapply(c("down", "up"), function(direction) {
+    utilsFanc::t.stat(paste0("Processing Cluster: ", cluster))
+    
+    df <- s2b[[slot]]
+    
+    if (cols != "all")
+      df <- df[, unique(c("gene", cols))]
+    
+    lapply(c("up", "down"), function(direction) {
       genes <- s2b[[summ]][[paste0(direction, ".genes")]]
       df <- df %>% dplyr::filter(gene %in% genes) %>%
         dplyr::arrange(padj)
@@ -2796,19 +2814,32 @@ de.write.xls <- function(de, cluster.alias = NULL,
       if (grepl(":", df$gene[1])) {
         colnames(df)[1] <- "peak"
       }
+      
+      if (!is.null(prefix)) {
+        sheet <- paste0(prefix, "_", sheet)
+      }
+
+      if (nrow(df) == 0)
+        df[1, ] <- rep("", ncol(df))
       xlsx::write.xlsx(x = df, file = out.file, sheetName = sheet,
                        append = T, row.names = F, col.names = T)
       return()
     })
   })
+  return()
 }
 
 de.write.xls.all.genes <- function(de, cluster.alias = NULL,
-                         slot = "res.exp",
-                         out.file) {
+                         slot = "res.exp", padj.cutoff = NULL,
+                         out.file,
+                         append = F,
+                         prefix = NULL) {
   # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
-  system(paste0("rm -rf ", out.file))
+  if (!append)
+    system(paste0("rm -rf ", out.file))
+  
   dir.create(dirname(out.file), showWarnings = F, recursive = T)
+  
   lapply(de, function(s2b) {
     if (!is.null(cluster.alias)) {
       cluster <- cluster.alias %>% dplyr::filter(name == s2b$root.name) %>%
@@ -2820,7 +2851,11 @@ de.write.xls.all.genes <- function(de, cluster.alias = NULL,
       cluster <- s2b$root.name
     }
     df <- s2b[[slot]]
-    xlsx::write.xlsx(x = df, file = out.file, sheetName = cluster,
+    sheetName <- cluster
+    if (!is.null(prefix)) {
+      sheetName <- paste0(prefix, "_", sheetName)
+    }
+    xlsx::write.xlsx(x = df, file = out.file, sheetName = sheetName,
                      append = T, row.names = F, col.names = T)
   })
 }

@@ -1501,7 +1501,7 @@ gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name,
                             rnk, # rnk file, you know how it works...
                             gene.set.name.display = "gene_set", # the title of the plot
                             gseaParam = 1, # the exponent for score calculation
-                            calculate.p = F,
+                            calculate.p = F, add.p.to.plot = T,
                             rank.name.display = "rank", # x axis of the plot
                             up.name.display = "up", # something like KO > WT
                             down.name.display = "down", # something like KO < WT
@@ -1634,6 +1634,29 @@ gsea.plot.curve <- function(genes = NULL, gmt.file, gmt.gene.set.name,
           axis.text.y = element_text(size = 6, family = "Arial"),
           axis.title.y = element_text(size = 6, family = "Arial", vjust = 0))
   
+  if (calculate.p && add.p.to.plot) {
+    p.value <- gsea.stats$pval[1]
+    
+    if (p.value < 0.001) {
+      p.value <- format(p.value, digits = 2, scientific = T)
+      p.value <- as.character(p.value)
+      if (!grepl("^\\d(\\.\\d+)*e\\-\\d+$", p.value)) {
+        stop(paste0("Unexpected format for p value: ", p.value))
+      }
+      a <- sub("e.+$", "", p.value)
+      b <- sub("^.+e", "", p.value)
+      
+      label <- substitute(italic(p) == A %*% 10^B, list(A = a, B = b))
+      
+    } else {
+      p.value <- format(p.value, digits = 2, scientific = F)
+      label <- substitute(italic(p) == A, list(A = p.value))
+    }
+    
+    p <- p + annotate("text", x = Inf, y = Inf, 
+                      label = label,
+                      hjust = 1.1, vjust = 1.1, family = "Arial", size = 0.36 * 5)
+  }
   if (!is.null(plot.out)) {
     dir.create(dirname(plot.out), showWarnings = F, recursive = T)
     ggsave(plot.out, p, width = width, height = height, units = "in", device = cairo_pdf)
