@@ -38,7 +38,8 @@ sc.qc.construct.so <- function(sample.info, project.name, mt.pattern,
         so <- CreateSeuratObject(so, project = project.name)
       }
       # so <- so[so@assays$RNA@counts %>% as.matrix() %>% apply(1, function(x) return(sum(x>0) >= min.cell.w.gene)),]
-      so <- so[rowSums(so@assays$RNA@counts > 0) >= min.cell.w.gene, ]
+      # use GetAssayData instead of so@assays$RNA@counts, because in newer versions of seurat, it's so@assays$RNA$counts
+      so <- so[rowSums(Seurat::GetAssayData(object = so, assay = "RNA", slot = "counts") > 0) >= min.cell.w.gene, ]
       
       # have to add additional assays after filtering genes
       # when you filter genes, all the other assays will magically disappear...
@@ -389,7 +390,8 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
                          metas.include = NULL,
                          add.all.normalization = F, 
                          sample.tsv, plot.only = F, split.by.metadata = T, 
-                         save.rds = T, plot.common.markers = T, plot.metrics = T,
+                         save.rds = T, plot.common.markers = T, panels.to.plot = NULL,
+                         plot.metrics = T,
                          split.by = NULL, split.order = NULL,
                          to.human = F,
                          bc.metrics.file.list = NULL, 
@@ -469,9 +471,9 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
     if (save.rds == T)
     saveRDS(soi, paste0(work.dir, "/soi.Rds"))
   }
-
-  trash <- DimPlot(soi, reduction = "umap", label = T, pt.size = 0.5, label.size = 10, shuffle = T) +
-    ggsave(paste0(plot.dir, "/umap_cluster.png"), device = "png", width = 10, height = 10, dpi= 200, units = "in")
+  
+  p <- DimPlot(soi, reduction = "umap", label = T, pt.size = 0.5, label.size = 10, shuffle = T)
+  ggsave(paste0(plot.dir, "/umap_cluster.png"), p, device = "png", width = 10, height = 10, dpi= 200, units = "in")
   
   #soi[["age_skewing"]] <- paste0(soi[["age"]]$age, "_", soi[["skewing"]]$skewing)
   if (split.by.metadata == T && !is.null(metas.include)) {
@@ -495,7 +497,8 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
   }
   
   if (plot.common.markers == T) {
-    trash <- hmtp.common.markers(obj = soi, plot.dir = plot.dir, to.human = to.human, threads = NULL, 
+    trash <- hmtp.common.markers(obj = soi, panels.to.plot = panels.to.plot, 
+                                 plot.dir = plot.dir, to.human = to.human, threads = NULL, 
                                  split.by = split.by, split.order = split.order)
   }
 
