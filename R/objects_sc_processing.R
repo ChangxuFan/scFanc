@@ -14,7 +14,8 @@ find.elbow.fanc <- function(df, spar=0.6, mask.rank.pct = c(80 ,100)) {
 
 sc.qc.construct.so <- function(sample.info, project.name, mt.pattern,
                                construct.FUN = NULL, construct.arg.list=NULL, 
-                               min.gene=200, min.cell.w.gene=5, type = "Gene Expression",
+                               min.gene=200, min.cell.w.gene=5, use.ensembl.ID = F,
+                               type = "Gene Expression",
                                threads = NULL) {
   if (is.character(sample.info))
     sample.info <- read.table(sample.info, header = T, as.is = T, sep = "\t")
@@ -28,7 +29,7 @@ sc.qc.construct.so <- function(sample.info, project.name, mt.pattern,
       if (!is.null(construct.FUN))
         so <- do.call(construct.FUN, c(list(x$dir), project.name = project.name,construct.arg.list))
       else {
-        so <- Read10X(data.dir = x$dir)
+        so <- Read10X(data.dir = x$dir, gene.column = ifelse(use.ensembl.ID, 1, 2))
         if (is.list(so)) {
           if ("Antibody Capture" %in% names(so)) {
             add.assays$ADT <- CreateAssayObject(counts = so[["Antibody Capture"]])
@@ -453,8 +454,6 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
     trash <- count.by.cluster(soi, work.dir, group.by = "sample")
   }
   
-  
-  
   # try({
   #   png(paste0(plot.dir, "/elbow.png"))
   #   print(ElbowPlot(soi, ndims = 60, reduction = "pca"))
@@ -482,15 +481,14 @@ cluster.pipe <- function(soi, assay, assay.pre = "RNA", is.sct.int = T,
     plot.panel.list(panel.list = metas.include, obj = soi, binarize.panel = T, 
                     order = T, assay = assay, 
                     raster = T, publication = F,
-                    root.name = paste0(plot.dir, "/umap_meta_hl"),
+                    plot.out = paste0(plot.dir, "/umap_meta_hl..TRUE.pdf"),
                     invisible = T)
   }
   
-  
-  if (plot.metrics ==T ) {
-    try(trash <- vln.depth.2(so = soi, ao = NULL, bc.metrics.file.list = bc.metrics.file.list,metas.plot = NULL,
+  if (plot.metrics ==T && !is.null(bc.metrics.file.list)) {
+    try({trash <- vln.depth.2(so = soi, ao = NULL, bc.metrics.file.list = bc.metrics.file.list,metas.plot = NULL,
                          plot.out = paste0(plot.dir,"/metrics.pdf"), sub.width = 7.5, violin = T, page.limit = 4,
-                         max.quantile = 0.99, n.col = 4, numeric.only = T, sub.height = 3))
+                         max.quantile = 0.99, n.col = 4, numeric.only = T, sub.height = 3)})
     # 
     # try(trash <- vln.depth(so = soi, bc.metrics.file.list = bc.metrics.file.list, plot.dir = plot.dir, split.by = "sample",
     #                      return.so = F, force.re.add = T))

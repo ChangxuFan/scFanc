@@ -1,3 +1,91 @@
+marker.df.join.summarize <- function(
+    df.list, clusters.use, 
+    summarise.col = "pct.1", aggr.fun = max, 
+    cluster.fun = function(x, clusters) return(clusters[which.max(x)[1]])
+    ) {
+  # df.list <- list(eye = FindAllMarkers(), joint = FindAllMarkers())
+  # clusters.use <- list(eye = "all", joint = c(1, 2, 3))
+  if (is.null(names(df.list))) {
+    stop("is.null(names(df.list))")
+  }
+
+  if (!identical(sort(names(df.list)), sort(names(clusters.use)))) {
+    stop("!identical(sort(names(df.list), sort(names(clusters.use))))")
+  }
+  
+  names <- names(df.list)
+  
+  j <- lapply(names, function(name) {
+    df <- df.list[[name]]
+    clusters <- clusters.use[[name]]
+    
+    if (clusters[[1]] != "all") {
+      utilsFanc::check.intersect(clusters, "clusters", df$cluster, "df$cluster")
+      df <- df %>% dplyr::filter(cluster %in% clusters)
+    }
+    
+    df <- df %>% dplyr::group_by(gene) %>% 
+      dplyr::summarise(
+        summ = aggr.fun(!!as.name(summarise.col)),
+        cluster = cluster.fun(!!as.name(summarise.col), cluster)) %>% 
+      dplyr::ungroup() %>% as.data.frame()
+
+    colnames(df) <- c("gene", name, paste0(name, ".cluster"))
+    return(df)
+  }) %>% Reduce(inner_join, .)
+  return(j)
+}
+
+marker.rank.by.pct.expr <- function(pct.mat, cols.use, rearrange.cols = T, expr.cutoff, add.summ.as.col = T,
+                                    add.which.col = T) {
+  # pct.mat is a matrix with genes as rows and clusters as columns
+  # expr.cutoff: cutoff value for considered as expressed.
+  utilsFanc::check.intersect(cols.use, "cols.use", colnames(pct.mat), "colnames(pct.mat)")
+  
+  if (rearrange.cols)
+    pct.mat <- cbind(pct.mat[, !colnames(pct.mat) %in% cols.use, drop = F], pct.mat[, cols.use])
+  
+  summ <- rowSums(pct.mat[, cols.use, drop = F] > expr.cutoff)
+  pct.mat <- cbind(pct.mat, summ)
+  colnames(pct.mat)[ncol(pct.mat)] <- "summ"
+  
+  pct.mat <- pct.mat[order(pct.mat[, "summ"]),]
+  
+  if (!add.summ.as.col) {
+    pct.mat <- pct.mat[, -ncol(pct.mat)]
+  }
+  
+  if (add.which.col) {
+    which <- sapply(1:nrow(pct.mat), function(i) {
+      x <- pct.mat[i, cols.use]
+      names(x)[which(x > expr.cutoff)] %>% paste0(collapse = ",")
+    })
+    pct.mat <- cbind(pct.mat, which)
+    colnames(pct.mat)[ncol(pct.mat)] <- "which"
+  }
+  
+  return(pct.mat)
+}
+
+cluster.2.tissue <- function(x, map) {
+  # x <- c("25,38", "10", "", "11)
+  # map <- table(soi@meta.data[, c("seurat_clusters", "tissue_general")])
+  max.map <- sapply(1:nrow(map), function(i) {
+    x <- map[i, ]
+    return(names(x)[which.max(x)])
+  })
+  names(max.map) <- rownames(map)
+  
+  null.map <- c("")
+  names(null.map) <- ""
+  
+  max.map <- c(max.map, null.map)
+  
+  mapped <- sapply(strsplit(x, ","), function(x) paste0(max.map[x], collapse = ","))
+  names(mapped) <- NULL
+  return(mapped)
+}
+
 # #>>>>>>>> Old code
 # lin.marker.gen <- function(so, markers=NULL, cluster.ident, lin.df, fg.pct.cutoff,  each.bg.pct, each.bg.logFC,
 #                            bg.pct.cutoff, bg.logFC.cutoff, out.Rds = NULL, threads = 1, out.gmt = NULL) {

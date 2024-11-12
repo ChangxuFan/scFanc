@@ -246,7 +246,7 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
                             ymax = NULL, ymin = 0,
                             plot.out = NULL, root.name = NULL,
                             to.human = F, limits = NULL, return.list = F, pt.size = 0.05, page.limit = 200, n.col = NULL,
-                            raster = F, auto.adjust.raster.pt.size = T,
+                            raster = T, auto.adjust.raster.pt.size = F,
                             binarize.panel = F, binarize.items = NULL,
                             reduction = "umap", cells = NULL, max.quantile = NULL,add.median = T,
                             subset.ident = NULL, subset.idents,
@@ -256,11 +256,12 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
                             publication = F, 
                             threads = 1, ...) {
 
+  version <- obj@version %>% stringr::str_extract("\\d") %>% as.numeric()
   if (is.motif == T) {
     panel.list <- motif.2.genes(panel.list %>% unlist(), species = motif.species, map = motif.map) %>% unlist()
   }
   if (is.null(plot.out) && !is.null(root.name)) {
-    plot.out <- paste0(root.name, "..", assay, "..", order, ".png")
+    plot.out <- paste0(root.name, "..", assay, "..", order, ".pdf")
   }
   if ("ArchRProject" %in% class(obj)) {
     obj <- fake.so.gen(ao = obj, ao.embedding = ao.embedding)
@@ -351,15 +352,20 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
     all.markers <- toupper(all.markers)
   }
 
-
+  #>>>>>>>>>>>>>>> plotting starts
   p <- mclapply(all.markers, function(m) {
     
     if (m %in% colnames(obj@meta.data)) {
       vec <- obj@meta.data[, m]
     }
     else {
-      mat <- Seurat::GetAssayData(object = obj, slot = "data", assay = assay)
-      vec <- mat[m, ] %>% as.vector()
+      if (version >= 5) {
+        vec <- obj@assays[[assay]]$data[m, ]
+      } else {
+        vec <- obj@assays[[assay]]@data[m, ]
+      }
+      # mat <- Seurat::GetAssayData(object = obj, slot = "data", assay = assay)
+      # vec <- mat[m, ] %>% as.vector()
     }
     
     if (!(m %in% colnames(obj@meta.data) && !is.numeric(obj@meta.data[, m]))) {
@@ -436,7 +442,7 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
 
       } else {
         p.sub <- FeaturePlot(obj, m, label = label, label.size = label.size ,cells = cells, order = order, reduction = reduction,
-                             combine = F, split.by = split.by, pt.size = pt.size, raster = raster)
+                             combine = F, split.by = split.by, pt.size = pt.size, raster = F)
 
         # if (is.null(limits) && length(p.sub) > 1 && is.null(max.quantile)) {
         #   scale.max <- lapply(p.sub, function(psi) {
@@ -448,10 +454,11 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
         # }
 
         color.map <- c(data.min, limits, data.max)
+        color.map <- c(data.min, max(data.min, min(limits)), max(limits), data.max)
         range <- data.max - data.min
         color.map[2] <- color.map[2] + 0.001 * range
         color.map[3] <- color.map[3] - 0.001 * range
-        # There can't be ties. ggplot2 will generate a bug if there are ties. 
+        # There can't be ties. ggplot2 will generate a bug if there are ties.
         # Doing the above to get rid of ties
 
         p.sub <- lapply(p.sub, function(psi) {
@@ -482,7 +489,7 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
             #     aspect.ratio = 1
             #   ))
             # } else {
-            # 
+            #
             # }
             # psi <- psi + theme_void()
             psi <- suppressMessages(psi + theme(
@@ -493,27 +500,27 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
               axis.line = element_blank(),
               aspect.ratio = 1
             ))
-            psi <- psi + 
-              theme(plot.title = element_text(size=6, margin = margin(b = -0.02, unit = "in"), 
+            psi <- psi +
+              theme(plot.title = element_text(size=6, margin = margin(b = -0.02, unit = "in"),
                                               face = ifelse(italic.title, 'italic', 'plain'), family = "Arial"),
-                    text = element_text(size = 5,  color = "black", family = "Arial"), 
+                    text = element_text(size = 5,  color = "black", family = "Arial"),
                     plot.margin = margin(t = 0, r = 0.12, b = 0, l =0, unit = "in"),
-                    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"), 
-                    legend.box.margin = margin(t = -0.12, r = -0.1, b = 0, 
+                    legend.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "in"),
+                    legend.box.margin = margin(t = -0.12, r = -0.1, b = 0,
                                                l = ifelse(!is.null(split.by) && !use.split.as.title, -0.3, -0.15),
-                                               unit = "in"), 
-                    legend.background = element_blank(), 
-                    legend.spacing = unit(0.02, "in"), legend.key.size = unit(0.05, "in"), 
+                                               unit = "in"),
+                    legend.background = element_blank(),
+                    legend.spacing = unit(0.02, "in"), legend.key.size = unit(0.05, "in"),
                     legend.box = "vertical", legend.title = element_text(size = 5, family = "Arial"),
                     legend.text = element_text(size = 5, family = "Arial"),
                     axis.title.y.right = element_text(size = 6, family = "Arial", vjust = -1),
                     panel.border = element_blank()
               ) +
-              guides(color = guide_colourbar(barwidth = 0.3, barheight = 2)) 
+              guides(color = guide_colourbar(barwidth = 0.3, barheight = 2))
             if (hide.legend) {
               psi <- psi + theme(legend.position = "none")
             }
-            
+
           } else {
             psi <- suppressMessages(psi +
                                       theme(axis.title=element_blank(),
@@ -528,6 +535,9 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
           }
           if (!is.null(polygon.df))
             psi <- psi + geom_polygon(data = polygon.df, mapping = aes(x = x, y = y), fill = NA, color = "red")
+          if (raster) {
+            psi <- ggrastr::rasterize(psi, dpi=300)
+          }
           return(psi)
         })
       }

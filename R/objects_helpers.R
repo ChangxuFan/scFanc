@@ -919,20 +919,25 @@ gene.peak.df.by.dist <- function(genes = NULL, promoters.gr, peaks, distance.1si
   return(df)
 }
 
-pct.detect.mat <- function(so, genes, group.by, groups = NULL, split.by = NULL, splits = NULL,
+pct.detect.mat <- function(so, assay = "RNA", genes, group.by, groups = NULL, split.by = NULL, splits = NULL,
                            style = "ArchR", 
                            plot.out = NULL, width = NULL, height = NULL,
                            label.pct = F,
                            hm.colors = c("white", "green3"), hm.values = NULL, show_column_dend = F,
                            cluster_columns = T, clustering_distance_columns = "pearson",
                            cluster_rows = T, clustering_distance_rows = "pearson", ...) {
+  DefaultAssay(so) <- assay
   utilsFanc::check.intersect(genes, "genes", rownames(so), "rownames(so)")
   cells <- get.cell.list(so, group.by = group.by, groups = groups, split.by = split.by, splits = splits, 
                          is.ao = F, return.named.vec = T, style = style)
   
-  pct.mat <- aggregate.fanc(mat = soi@assays$RNA@counts[genes, ],
+  mat <- GetAssayData(object = soi, assay = assay, slot = "counts")
+  pct.mat <- aggregate.fanc(mat = mat[genes, ],
                             margin = 2, groupings = cells, binarize = T, take.mean = T)
   pct.mat <- as.matrix(pct.mat)
+  
+  rm(mat)
+  gc()
   
   if (!is.null(plot.out)) {
     data.out <- tools::file_path_sans_ext(plot.out) %>% paste0(".csv")
@@ -1000,4 +1005,176 @@ pct.detect.mat <- function(so, genes, group.by, groups = NULL, split.by = NULL, 
     
   }
   return(pct.mat)
+}
+
+
+counts.ensembl.to.symbol <- function(counts, EnsDb = EnsDb.Hsapiens.v86) {
+  # counts <- soi@assays$RNA@counts
+  stop(paste0("this function is deprecated: The latest EnsDb available for R is EnsDb.Hsapiens.v86, which is still too outdated\n",
+              "use counts.ensembl.to.symbol.2 instead"))
+  gene.map <- ensembldb::select(EnsDb, keys= rownames(counts),
+                                keytype = "GENEID", columns = c("SYMBOL","GENEID"))
+  pct.mapped <- round(100 * nrow(gene.map)/nrow(counts), digits = 2)
+  
+  if (pct.mapped < 90) {
+    stop(paste0("Only ", pct.mapped, "% of the symbols were mapped. Exiting."))
+  }
+  
+  # nrow(soi) # 60664
+  # nrow(gene.map) # 57131
+  
+  # So some of them were still not mapped. But not a huge deal.
+  
+  # sum(is.na(gene.map$SYMBOL)) # 0
+  # sum(duplicated(gene.map$SYMBOL)) # 1713
+  # 
+  # sum(is.na(gene.map$GENEID)) # 0
+  # sum(duplicated(gene.map$GENEID)) # 0
+  
+  counts <- counts[rownames(counts) %in% gene.map$GENEID, ]
+  if (!identical(rownames(counts), gene.map$GENEID)) {
+    stop("!identical(rownames(counts), gene.map$GENEID)")
+  }
+  
+  if (sum(duplicated(gene.map$SYMBOL)) > 1) {
+    print("Dups detected in Symbols, handling that!")
+    dups.symbol <- gene.map$SYMBOL[duplicated(gene.map$SYMBOL)]
+    dups <- gene.map$GENEID[gene.map$SYMBOL %in% dups.symbol]
+    
+    counts.dup <- counts[rownames(counts) %in% dups,]
+    map.dup <- gene.map[gene.map$GENEID %in% dups,]
+    
+    if (!identical(rownames(counts.dup), map.dup$GENEID)) {
+      stop("!identical(rownames(counts.dup), map.dup$GENEID)")
+    }
+    
+    counts.nd <- counts[!rownames(counts) %in% dups,]
+    map.nd <- gene.map[!gene.map$GENEID %in% dups,]
+    
+    if (!identical(rownames(counts.nd), map.nd$GENEID)) {
+      stop("!identical(rownames(counts.nd), map.nd$GENEID)")
+    }
+    
+    counts.dup <- aggregate.Matrix(counts.dup, groupings = map.dup$SYMBOL, fun = 'sum')
+    rownames(counts.nd) <- map.nd$SYMBOL
+    counts <- rbind(counts.nd, counts.dup)
+  } else {
+    rownames(counts) <- gene.map$SYMBOL
+  }
+  
+  if (any(duplicated(rownames(counts)))) {
+    stop("any(dupliated(rownames(counts)))")
+  }
+  
+  if (any(grepl("^ENSG\\d", rownames(counts)))) {
+    stop("failed: found ensembl ID in rownames")
+  }
+  return(counts)
+}
+
+counts.ensembl.to.symbol.2 <- function(counts, gtf, rm.version = T, must.all.map = T) {
+  # counts <- soi@assays$RNA@counts
+  # gtf <- "/scratch/fanc/genomes/hg38/gencode/gencode.v26.primary_assembly.annotation.gtf"
+  if (is.character(gtf))
+    gr <- rtracklayer::import(gtf)
+  else
+    gr <- gtf
+  
+  df <- mcols(gr)[, c("gene_id", "gene_name")] %>% as.data.frame() %>% unique()
+  colnames(df) <- c("GENEID", "SYMBOL")
+  
+  if (rm.version)
+    df$GENEID <- df$GENEID %>% sub("\\..+$", "", .)
+  
+  df <- unique(df)
+  if (sum(duplicated(df$GENEID)) > 0) {
+    stop("sum(duplicated(df$GENEID)) > 0")
+  }
+  
+  # sum(is.na(df$SYMBOL)) # 0
+  # sort(table(df$SYMBOL), decreasing = T) %>% head(30)
+    #     Y_RNA Metazoa_SRP          U3          U6      uc_338      snoU13     SNORA70     SNORA31     SNORA40          U8          U2 
+    #     758         169          55          37          36          32          30          27          22          22          21 
+    # SNORA25     5S_rRNA          U1        pRNA     SNORA48     SNORA51     SNORA26     SNORA63    RNA5-8S5     SNORA11     SNORA18 
+    #      20          17          16          13          13          13          11          11           8           8           8 
+    # SNORA67     SNORA72     SNORA75         7SK    SCARNA20     SNORA62     SNORA74     SNORD56 
+    #       8           8           8           7           7           7           7           7 
+  
+  # sum(df$SYMBOL == "") # 0
+  
+  if (must.all.map) {
+    utilsFanc::check.intersect(rownames(counts), "rownames(counts)", df$GENEID, "df$GENEID")
+  }
+  
+  counts <- counts[rownames(counts) %in% df$GENEID, ]
+  rownames(df) <- df$GENEID
+  
+  gene.map <- df[rownames(counts),]
+  rm(df)
+  rm(gr)
+  rm(gtf)
+  gc()
+  # pct.mapped <- round(100 * nrow(gene.map)/nrow(counts), digits = 2)
+  # 
+  # if (pct.mapped < 90) {
+  #   stop(paste0("Only ", pct.mapped, "% of the symbols were mapped. Exiting."))
+  # }
+  # 
+  
+  if (!identical(rownames(counts), gene.map$GENEID)) {
+    stop("!identical(rownames(counts), gene.map$GENEID)")
+  }
+  
+  if (sum(duplicated(gene.map$SYMBOL)) > 1) {
+    print("Dups detected in Symbols, handling that!")
+    dups.symbol <- gene.map$SYMBOL[duplicated(gene.map$SYMBOL)]
+    dups <- gene.map$GENEID[gene.map$SYMBOL %in% dups.symbol]
+    
+    counts.dup <- counts[rownames(counts) %in% dups,]
+    map.dup <- gene.map[gene.map$GENEID %in% dups,]
+    
+    if (!identical(rownames(counts.dup), map.dup$GENEID)) {
+      stop("!identical(rownames(counts.dup), map.dup$GENEID)")
+    }
+    
+    counts.nd <- counts[!rownames(counts) %in% dups,]
+    map.nd <- gene.map[!gene.map$GENEID %in% dups,]
+    
+    if (!identical(rownames(counts.nd), map.nd$GENEID)) {
+      stop("!identical(rownames(counts.nd), map.nd$GENEID)")
+    }
+    
+    counts.dup <- aggregate.Matrix(counts.dup, groupings = map.dup$SYMBOL, fun = 'sum')
+    rownames(counts.nd) <- map.nd$SYMBOL
+    counts <- rbind(counts.nd, counts.dup)
+  } else {
+    rownames(counts) <- gene.map$SYMBOL
+  }
+  
+  if (any(duplicated(rownames(counts)))) {
+    stop("any(dupliated(rownames(counts)))")
+  }
+  
+  if (any(grepl("^ENSG\\d", rownames(counts)))) {
+    stop("failed: found ensembl ID in rownames")
+  }
+  return(counts)
+}
+
+
+gene.expr.mat.2.df <- function(mat) {
+  df <- as.data.frame(mat)
+  df <- cbind(gene = rownames(df), df)
+  rownames(df) <- NULL
+  return(df)
+}
+
+expr.mat.highlight <- function(mat, cols, cutoff) {
+  # df should also work.
+  # anything lower than the cutoff will be changed to ""
+  utilsFanc::check.intersect(cols, "cols", colnames(mat), colnames(mat))
+  for (col in cols) {
+    mat[, col][mat[, col] < cutoff] <- ""
+  }
+  return(mat)
 }
