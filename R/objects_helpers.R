@@ -1072,7 +1072,7 @@ counts.ensembl.to.symbol <- function(counts, EnsDb = EnsDb.Hsapiens.v86) {
   return(counts)
 }
 
-counts.ensembl.to.symbol.2 <- function(counts, gtf, rm.version = T, must.all.map = T) {
+counts.ensembl.to.symbol.2 <- function(counts, gtf, rm.version = T, must.all.map = T, no.ensembl.left = T) {
   # counts <- soi@assays$RNA@counts
   # gtf <- "/scratch/fanc/genomes/hg38/gencode/gencode.v26.primary_assembly.annotation.gtf"
   if (is.character(gtf))
@@ -1156,7 +1156,11 @@ counts.ensembl.to.symbol.2 <- function(counts, gtf, rm.version = T, must.all.map
   }
   
   if (any(grepl("^ENSG\\d", rownames(counts)))) {
-    stop("failed: found ensembl ID in rownames")
+    msg <- "Found ensembl ID in rownames"
+    if (no.ensembl.left)
+      stop(msg)
+    else
+      warning(msg)
   }
   return(counts)
 }
