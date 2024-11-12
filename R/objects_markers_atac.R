@@ -161,12 +161,16 @@ plot.mat.auto.clustering <- function(mat, k.cut=NULL, k.m=NULL, cluster_rows, cl
   invisible(hm)
 }
 
-plot.mat.rank.row <- function(mat, no.ranking = F, no.col.cluster = F,
+plot.mat.rank.row <- function(mat, symbol.mat = NULL, no.ranking = F, no.col.cluster = F,
                               title = "", hm.colors = NULL,
                               hm.values,
                               show_column_names = T, show_row_names = F, show_column_dend = T,
                               col.dist = "pearson", col.method = "complete", plot.out, 
-                              width = 2, height = 2, ...) {
+                              row_name_fontSize = 5,
+                              width = 2, height = 2, 
+                              # You can actually cluster rows with this function, but by default we don't
+                              cluster_rows = F, row.dist = "pearson", row.method = "complete",
+                              ...) {
   fake.hm <- ComplexHeatmap::Heatmap(
     matrix = mat, cluster_columns = T, clustering_distance_columns = col.dist,
     clustering_method_columns = col.method)
@@ -177,6 +181,10 @@ plot.mat.rank.row <- function(mat, no.ranking = F, no.col.cluster = F,
   }
   
   if (!no.ranking) {
+    # newly added
+    
+    mat <- mat[rev(order(rowMax(mat))),]
+    # 
     which.row.max <- apply(mat, 1, which.max)
     row.order <- order(which.row.max)
     mat <- mat[row.order, ]
@@ -191,25 +199,46 @@ plot.mat.rank.row <- function(mat, no.ranking = F, no.col.cluster = F,
     col_fun = circlize::colorRamp2(hm.values, hm.colors)
   }
   
-  
   hm.params <- list(matrix = mat, col = col_fun,
                     show_column_names = show_column_names, show_row_names = show_row_names,
                     show_column_dend = show_column_dend, 
                     cluster_columns = !no.col.cluster, clustering_distance_columns = col.dist, 
                     clustering_method_columns = col.method,
-                    cluster_rows = F,
-                    row_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
+                    # You can cluster roles... but by default we don't
+                    cluster_rows = cluster_rows, clustering_distance_rows = row.dist, 
+                    clustering_method_rows = row.method,
+                    #
+                    row_names_gp = gpar(fontsize = row_name_fontSize, fontfamily = "Arial", lineheight = 0.6),
                     column_names_gp = gpar(fontsize = 6, fontfamily = "Arial"),
                     column_dend_height = unit(0.1, "in"),
                     column_dend_gp = gpar(lwd = 0.5),
+                    row_dend_gp = gpar(lwd = 0.5),
+                    row_dend_width = unit(0.1, "in"),
                     show_heatmap_legend = T,
                     heatmap_legend_param = list(
                       title = title, labels_gp = gpar(fontsize = 5), title_gp = gpar(fontsize = 6),
                       legend_height = unit(0.3, "in"), grid_width = unit(0.05, "in"), gap = unit(2, "in")
+                    #   legend_direction = "horizontal"
                     ),
                     ...
                     
   )
+  
+  if (!is.null(symbol.mat)) {
+    if (!identical(sort(rownames(symbol.mat)), sort(rownames(mat)) )) {
+      stop("!identical(sort(rownames(symbol.mat)), sort(rownames(mat)) )")
+    }
+    if (!identical(sort(colnames(symbol.mat)), sort(colnames(mat)) )) {
+      stop("!identical(sort(colnames(symbol.mat)), sort(colnames(mat)) )")
+    }
+    symbol.mat <- symbol.mat[rownames(mat), colnames(mat)]
+    hm.params <- c(hm.params, list(
+      cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(symbol.mat[i, j], x, y,
+                  gp = gpar(fontsize = 5))
+      }
+    ))
+  }
 
   hm <- do.call(what = ComplexHeatmap::Heatmap, args = hm.params)
 

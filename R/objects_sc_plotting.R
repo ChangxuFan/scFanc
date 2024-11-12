@@ -1965,7 +1965,10 @@ umap.fanc <- function(obj,
 
 cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL, 
                              average.across, average.groups = NULL, average.method = "pct",
-                             color.map = NULL, publication = T,
+                             align.groups = F, align.groups.padding = 0.02,
+                             label.groups = F,
+                             color.map = NULL, publication = T, plot.legend = T,
+                             publication.width = 1.2, publication.height = 1,
                              out.file = NULL) {
   # it plots the type of bar graph where each column sums to 1
   # x: what you want the x axis to be
@@ -1986,7 +1989,7 @@ cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL,
   }
   if (!is.null(groups)) {
     meta <- meta %>% dplyr::filter(group.by %in% groups)
-    meta$group.by <- factor(meta$group.by, levels = unique(groups))
+    meta$group.by <- factor(meta$group.by, levels = rev(unique(groups)))
   }
   if (!is.null(average.groups))
     meta <- meta %>% dplyr::filter(average.across %in% average.groups)
@@ -2012,11 +2015,41 @@ cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL,
     xdf$x <- tmp
     return(xdf)
   }) %>% do.call(rbind, .)
-
+  
+  xs <- intersect(xs, unique(plot.df$x))
+  plot.df$x <- factor(plot.df$x, levels = rev(xs))
+  
+  if (align.groups) {
+    plot.df <- plot.df %>% split(., f=.$group.by) %>% 
+      lapply(function(plot.df) {
+        pct.max <- max(plot.df$pct)
+        # ph: placeholder
+        plot.df.ph <- plot.df
+        plot.df.ph$pct <- pct.max - plot.df.ph$pct + align.groups.padding
+        plot.df.ph$group.by <- paste0(plot.df.ph$group.by, '_ph')
+        return(rbind(plot.df, plot.df.ph))
+      }) %>% do.call(rbind, .)
+    if (is.null(groups)) {
+      groups <- plot.df$group.by %>% unique() %>% .[!grepl("_ph$", .)]
+    }
+    groups <- paste0(rep(groups, each = 2), 
+                     rep(c("", "_ph"), n = groups))
+    plot.df$group.by <- factor(plot.df$group.by, rev(groups))
+  }
+  
   p <- ggplot(plot.df, aes(x = x, y = pct)) +
     geom_bar(aes(fill = group.by), stat = "identity", show.legend = !publication)
   
   if (!is.null(color.map)) {
+    color.map.ori <- color.map
+    if (align.groups) {
+      # ph: placeholder
+      phs <- plot.df$group.by %>% .[grepl("_ph$", .)] %>% unique()
+      ph.map <- rep("white", length(phs))
+      names(ph.map) <- phs
+      color.map <- c(color.map, ph.map)
+    }
+    
     utilsFanc::check.intersect(unique(plot.df$group.by), "groups",
                                names(color.map), "names(color.map)")
     p <- p + scale_fill_manual(values = color.map)
@@ -2024,16 +2057,50 @@ cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL,
   if (publication && !is.null(out.file)) {
     p <- p %>% utilsFanc::theme.fc.1(rotate.x.45 = F, italic.x = F, rm.x.ticks = T)
     p <- p + coord_flip()
-    p <- p + scale_y_continuous(breaks = c(0, 1)) + theme(axis.ticks.y = element_blank())
+    ymax <- plot.df$pct %>% split(f = plot.df$x) %>% lapply(sum) %>% unlist() %>% max()
+    sec.y <- waiver()
+    if (label.groups) {
+      sample.1 <- plot.df$x[1] %>% as.character()
+      df <- plot.df %>% dplyr::filter(x == sample.1)
+      df <- df %>% dplyr::arrange(desc(group.by))
+      
+      cumsum.post <- cumsum(df$pct)
+      cumsum.pre <- c(0, cumsum.post[1:(length(cumsum.post) - 1)])
+      
+      df$cumsum <- cumsum.pre
+      
+      df <- df %>% dplyr::filter(!grepl("_ph$", group.by))
+      
+      csum <- df$cumsum
+      csum.shift <- c(csum[2:length(csum)], ymax)
+      csum <- 0.5 * (csum + csum.shift)
+      
+      sec.y <- sec_axis(
+        ~ .,
+        name = "Secondary X-Axis",
+        breaks = csum,
+        labels = df$group.by
+      )
+    }
+    p <- p + scale_y_continuous(breaks = c(0, ymax), labels = c(0, 1), 
+                                sec.axis = sec.y, expand = expansion(0, 0)) 
+
+    
+    p <- p + theme(axis.ticks.y = element_blank(), axis.line.x.top = element_blank())
+    
     dir.create(dirname(out.file), showWarnings = F, recursive = T)
-    ggsave(out.file, p, device = cairo_pdf, width = 1.2, height = 1)
+    ggsave(out.file, p, device = cairo_pdf,
+           width = publication.width, height = publication.height)
     
     # plot legend:
-    color.map <- color.map %>% .[names(.) %in% unique(plot.df$group.by)]
-    color.df <- data.frame(cell_type = names(color.map), color = color.map)
-    legend.plot(df = color.df, pt.size = 1.5,
-                out.file = paste0(tools::file_path_sans_ext(out.file), "_legend.pdf" ),
-                width = 1, height = 0.1 * length(color.map))
+    if (plot.legend && !is.null(color.map)) {
+      color.map <- color.map.ori %>% .[names(.) %in% unique(plot.df$group.by)]
+      color.df <- data.frame(cell_type = names(color.map), color = color.map)
+      
+      legend.plot(df = color.df, pt.size = 1.5,
+                  out.file = paste0(tools::file_path_sans_ext(out.file), "_legend.pdf" ),
+                  width = 1, height = 0.1 * length(color.map))
+    }
   } else {
     trash <- wrap.plots.fanc(list(p), plot.out = out.file)
   }
@@ -2127,12 +2194,16 @@ plot.line <- function(df, x, x.include = NULL, y, group.by, groups = NULL,
   invisible(p)
 }
 
-plot.confusion.mat <- function(mat, show_column_dend = F, 
+plot.confusion.mat <- function(mat, show_column_dend = F, use.rowMax = T,
                                no.col.cluster = T, no.row.rank = T,
                                plot.out,
                                width = 2, height = 2, ...) {
   rows <- rownames(mat)
-  mat <- diag(1/rowMax(mat)) %*% mat
+  if (use.rowMax)
+    mat <- diag(1/rowMax(mat)) %*% mat
+  else
+    mat <- diag(1/rowSums(mat)) %*% mat
+  
   rownames(mat) <- rows
   plot.mat.rank.row(mat = mat, no.ranking = no.row.rank, no.col.cluster = no.col.cluster,
                     hm.colors = c("midnightblue", "yellow"),
@@ -2218,4 +2289,5 @@ plot.single.cell.exp.mat <- function(so, assay, layer, binarize = T, cells, meta
   
   invisible(mat)
 }
+
 

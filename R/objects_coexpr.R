@@ -360,7 +360,8 @@ coexpr.grid <- function(so, assay, slot,
       if (pub) {
         tmp <- dimnames(symbol.mat)
         symbol.mat <- stringr::str_extract(symbol.mat, "\\*+") %>%
-          matrix(ncol = length(tmp[[1]]))
+          matrix(nrow = length(tmp[[1]]))
+        ## previously written as "ncol". didn't matter in that case because the matrix was symmetrical.
         dimnames(symbol.mat) <- tmp
         rm(tmp)
         symbol.mat[is.na(symbol.mat)] <- ""

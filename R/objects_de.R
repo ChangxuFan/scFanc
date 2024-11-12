@@ -3,11 +3,11 @@ de.slot.assert <- function(de, is.s2b = F, slot) {
     de <- list(de)
     names(de) <- de[[1]]$root.name
   }
-  
+
   bExists <- lapply(de, function(s2b) {
     slot %in% names(s2b)
   }) %>% unlist()
-  
+
   if(sum(!bExists) > 0) {
     stop(paste0("The following clusters do not have the slot '", slot, "':\n",
                 paste0(names(de)[!bExists], collapse = "\n")))
@@ -322,7 +322,7 @@ de.filter.pos <- function(grid, so, s2bo.list, master.ident, ident.1, comp, plot
   trash <- plot.panel.list.m(panel.list = tt, obj = so,
                              order = F, assay = "RNA", split.by = "sample",
                              plot.out = "~/test/mpage/miao_2.pdf", raster = T, return.list = F, pt.size = 0.8)
- 
+
 }
 
 replicated.markers <- function(so, cluster.ident= "seurat_clusters", cluster.idents = NULL, assay, slot,
@@ -658,7 +658,7 @@ deseq2.xyplot <- function(pbl, publication = F,
   # p.flag <- "padj"
   # if (use.p == T)
   #   p.flag <- "p"
-  
+
   if (publication) {
     if (is.null(sub.width)) sub.width <- 1.6
     if (is.null(sub.height)) sub.height <- 1.6
@@ -675,7 +675,7 @@ deseq2.xyplot <- function(pbl, publication = F,
     # highlight.ptsize = NULL
     # theme.text.size <- NULL
   }
-  
+
   if (is.null(root.name)) {
     root.name <- summ.slot
   }
@@ -811,7 +811,7 @@ deseq2.xyplot <- function(pbl, publication = F,
           } else {
             label.values <- NULL
           }
-          
+
           color.map <- utilsFanc::gg_color_hue(2)
           names(color.map) <- c("down", "up")
           if (!is.null(highlight.color) && !is.null(highlight.genes)) {
@@ -819,20 +819,20 @@ deseq2.xyplot <- function(pbl, publication = F,
             color.map <- highlight.color
             names(color.map) <- "hl"
           }
-          
+
           p <- xy.plot(df = df, x = comp.l$x, y = comp.l$y, transformation = transformation,
                        quantile.limit = quantile.limit, density.filter = density.filter,
                        highlight.var = highlight.var, highlight.values = de.df$gene,
                        label.var = label.var, label.values = label.values,
-                       use.geom_text = T, 
+                       use.geom_text = T,
                        plotly.var = "gene", highlight.color.var = "direction",
                        color.map = color.map,
                        highlight.only = highlight.only,
                        plotly.label.all = plotly.label.all,
                        show.highlight.color.var = F, raster = T,
-                       pt.size = pt.size, pt.shape = pt.shape, 
+                       pt.size = pt.size, pt.shape = pt.shape,
                        highlight.ptsize = highlight.ptsize,
-                       theme.text.size = theme.text.size, 
+                       theme.text.size = theme.text.size,
                        ...) +
             ggtitle(paste0(root.name, "  ", s2b.name.2))
           if (publication) {
@@ -840,8 +840,8 @@ deseq2.xyplot <- function(pbl, publication = F,
             # p <- p + theme(aspect.ratio = 1, plot.title = element_text(
             #   size = 6, hjust = 0.5, margin = margin(b = 0, unit = "in")))
           }
-            
-          
+
+
           return(p)
         })
         return(pl)
@@ -861,7 +861,7 @@ deseq2.xyplot <- function(pbl, publication = F,
 
   }) %>% Reduce(c, .) %>% return()
   plot.out <- paste0(plot.dir, "/", root.name, ".", device)
-  wrap.plots.fanc(plot.list = pl, plot.out = plot.out, tooltip = "gene", n.col = n.col, 
+  wrap.plots.fanc(plot.list = pl, plot.out = plot.out, tooltip = "gene", n.col = n.col,
                   sub.width = sub.width, sub.height = sub.height, pdf.use.cairo = F, pdf.by.row = T)
   if (length(pl) == 1) {
     pl <- pl[[1]]
@@ -1010,12 +1010,12 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
 
   pbl <- pbl[sapply(pbl, is.list)]
   s2b.names <- names(pbl)
-  
+
   if (!is.null(gene.out.dir)) {
     system(paste0("rm -rf ", gene.out.dir))
     system(paste0("mkdir -p ", gene.out.dir))
   }
-  
+
   pbl <- lapply(s2b.names, function(s2b.name) {
     s2b <- pbl[[s2b.name]]
     if (is.null(s2b[[res.slot]])) {
@@ -1025,25 +1025,25 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
       de.df <- s2b[[res.slot]] %>% as.data.frame()
       if (is.null(de.df$gene))
         de.df <- de.df %>%  dplyr::mutate(., gene = rownames(.))
-      
+
       if (!is.null(min.log2.exp)) {
         utilsFanc::check.intersect(min.log2.exp.samples, "min.log2.exp.samples",
                                    colnames(de.df), "colnames(de.df)")
         bPass <- rowSums(de.df[, min.log2.exp.samples] + 1 > 2^min.log2.exp) > 0
         de.df <- de.df[bPass, ]
       }
-      
+
       if (!is.null(exclude)) {
         if (exclude.by.overlap)
           stop("exclude by overlap has not been developped yet")
         de.df <- de.df %>% filter(!gene %in% exclude)
       }
-      
+
       de.df <- de.df %>% filter(abs(log2FoldChange) > log2fc.cutoff)
       if (is.null(use.topn.p)) {
         de.df <- de.df %>% filter(padj < padj.cutoff)
       } else {
-        de.df <- de.df %>% split(f = de.df$log2FoldChange > 0) %>% 
+        de.df <- de.df %>% split(f = de.df$log2FoldChange > 0) %>%
           lapply(function(de.df) {
             de.df <- de.df %>% dplyr::arrange(pvalue)
             de.df <- de.df[1:min(use.topn.p, nrow(de.df)),]
@@ -1052,12 +1052,12 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
         if (rank.by == "padj") rank.by <- "pvalue"
         padj.cutoff <- NA
       }
-      
+
       if (rank.by %in% c("padj", "pvalue"))
         de.df <- de.df %>% arrange(!!as.name(rank.by))
       else if (rank.by == "log2FoldChange")
         de.df <- de.df %>% arrange(desc(abs(!!as.name(rank.by))))
-      
+
       de.df <- de.df %>% dplyr::select(gene, log2FoldChange)
       s2b[[summary.slot]] <- list(padj.cutoff = padj.cutoff,
                           log2fc.cutoff = log2fc.cutoff,
@@ -1111,7 +1111,7 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
     }) %>% Reduce(rbind, .)
     system(paste0("mkdir -p ", dirname(stats.file)))
     write.table(stats, stats.file, row.names = F, col.names = T, sep = "\t", quote = F)
-    deseq2.stats.barplot(stats.df = stats.file, padj.cutoff = padj.cutoff, 
+    deseq2.stats.barplot(stats.df = stats.file, padj.cutoff = padj.cutoff,
                          log2fc.cutoff = log2fc.cutoff, topn.cutoff = use.topn.p)
   }
   return(pbl)
@@ -1141,10 +1141,10 @@ deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters
   p <- ggplot(stats.df, aes(x = name, y = n.genes, fill = type)) +
     geom_bar(stat = 'identity', position = "dodge") +
     geom_text(aes(label = n.genes), position = position_dodge(width = 0.8))
-  
+
   title <- paste("padj", padj.cutoff, "log2fc", log2fc.cutoff, "topn", topn.cutoff)
   p <- p + ggtitle(title)
-  
+
   if (!is.null(plot.out)) {
     dir.create(dirname(plot.out), showWarnings = F, recursive = T)
     ggsave(plot.out, p, width = 0.5 * length(unique(stats.df$name)) + 2, height = 5, dpi = 100)
@@ -1271,7 +1271,7 @@ deseq2.plot.panel <- function(pbl, so, max.plots = 50, summary.slot = "summary",
                                  plot.out = plot.out, raster = T, label = panel.label,
                                  pt.size = pt.size, auto.adjust.raster.pt.size = F, page.limit = page.limit,
                                  max.quantile = 0.99,
-                                 n.split = n.split, reduction = reduction, ident = cluster.ident, n.col = n.col, 
+                                 n.split = n.split, reduction = reduction, ident = cluster.ident, n.col = n.col,
                                  pdf.by.row = F, pdf.use.cairo = F,
                                  ...)
 
@@ -1485,18 +1485,25 @@ deseq2.pipe.ez <- function(soi, plot.only = T, pb.m = NULL, samples, pbl.soup = 
   return()
 }
 
-deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
+deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000, 
                                pca.groupings = c("type", "rep"),
                                return.plot.list = F, blind = T,
-                               add.hm = F, add.3d = F) {
+                               add.hm = F, add.3d = F,
+                               publication = F, pub.pt.size = 1.2,
+                               pub.width = 1.5, pub.height = 1.2,
+                               add.jitter = F, jitter.seed = 42) {
+  
   dir.create(dirname(plot.out), showWarnings = F, recursive = T)
   if (is.null(pca.ntop))
     pca.ntop <- 10000
   pl <- list()
   ntd <- normTransform(dds)
   rld <- rlog(dds,blind = blind, fitType = "local")
-  pl$ntd <- mean.sd.plot(mat = assay(ntd))
-  pl$rld <- mean.sd.plot(mat = assay(rld))
+  
+  if (!publication) {
+    pl$ntd <- mean.sd.plot(mat = assay(ntd))
+    pl$rld <- mean.sd.plot(mat = assay(rld))
+  }
 
   data <- plotPCA.fanc(rld, intgroup = pca.groupings,
                      ntop = pca.ntop, returnData = T, dims.return = 1:3)
@@ -1533,12 +1540,23 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
                             normalizePath.partial(path = tools::file_path_sans_ext(plot.out) %>% paste0(".html")))
   }
   pc.list <- list(c(1,2), c(1,3), c(2,3))
-  if (flag == T)
+  if (flag == T || publication == T)
     pc.list <- list(c(1,2))
 
   for (i in pc.list) {
     comp <- paste0("PC", i)
     p.name <- paste0(comp[1], ".", comp[2])
+    if (add.jitter) {
+      stop("jitter not validated")
+      set.seed(seed = jitter.seed)
+      for (i in 1:2) {
+        vec <- pcaData[, comp[i]]
+        span <- max(vec) - min(vec)
+        noise <- rnorm(length(vec), mean = 0, sd = 0.05 * span)
+        pcaData[, comp[i]] <- pcaData[, comp[i]] + noise
+      }
+    }
+    
     if (length(pca.groupings) >= 1) {
       if (length(pca.groupings) == 1) {
         pl[[p.name]] <- ggplot(pcaData, aes_string(comp[1], comp[2], color=pca.groupings[1]))
@@ -1546,13 +1564,45 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
         pl[[p.name]] <- ggplot(pcaData, aes_string(comp[1], comp[2], color=pca.groupings[1],
                                      shape=pca.groupings[2]))
       }
-       pl[[p.name]] <- pl[[p.name]] +
-        geom_point(size=3) +
-        xlab(paste0(comp[1], ": ",percentVar[i[1]],"% variance")) +
-        ylab(paste0(comp[2], ": ",percentVar[i[2]],"% variance")) +
-        theme_bw() +
-        theme(aspect.ratio = 1) +
-        ggtitle("ntop: " %>% paste0(pca.ntop))
+      if (publication) {
+        pl[[p.name]] <- pl[[p.name]] +
+          geom_point(size = pub.pt.size) +
+          xlab(paste0(comp[1], ": ",percentVar[i[1]],"% variance")) +
+          ylab(paste0(comp[2], ": ",percentVar[i[2]],"% variance"))
+
+        pl[[p.name]] <- utilsFanc::theme.fc.1(pl[[p.name]], italic.x = F, remove.axis.titles = F) +
+          theme(legend.position = "right", legend.direction = "vertical", aspect.ratio = 1,
+                plot.margin = unit(c(0, 0.15, 0, 0.05), "in"))
+        
+        if (length(pca.groupings) == 2) {
+          groups <- pcaData[, pca.groupings[2]] %>% unique() %>% sort()
+          shape.map <- 1:length(groups)
+          if (length(groups) == 2) 
+            shape.map <- c(1, 4)
+          
+          names(shape.map) <- groups
+          pl[[p.name]] <- pl[[p.name]] + scale_shape_manual(values = shape.map)
+        }
+        
+        # Hyung Joo's palette.
+        groups <- pcaData[, pca.groupings[1]] %>% unique() %>% sort()
+
+        if (length(groups) == 4) {
+          color.map <- c("#440077", "#00AAFF", "#AAAAAA", "#FF00AA")
+          names(color.map) <- groups
+          pl[[p.name]] <- pl[[p.name]] + scale_color_manual(values = color.map)
+        }
+        
+      }  else {
+        pl[[p.name]] <- pl[[p.name]] +
+          geom_point(size=3) +
+          xlab(paste0(comp[1], ": ",percentVar[i[1]],"% variance")) +
+          ylab(paste0(comp[2], ": ",percentVar[i[2]],"% variance")) +
+          theme_bw() +
+          theme(aspect.ratio = 1) +
+          ggtitle("ntop: " %>% paste0(pca.ntop))
+      }
+      
     }
     if (!is.na(pca.groupings[3])) {
       y.span <- max(pcaData[, comp[2]]) - min(pcaData[, comp[2]])
@@ -1572,7 +1622,13 @@ deseq2.assess.core <- function(dds, plot.out, pca.ntop = 10000,
   #     theme(aspect.ratio = 1)
   # }
   #
-  trash <- wrap.plots.fanc(pl, plot.out = plot.out)
+  if (publication) {
+    pl[[1]] <- pl[[1]] + theme(legend.text = element_text(margin = margin(b = 0.02, unit = "in")))
+    ggsave(plot.out, pl[[1]], width = pub.width, height = pub.height, device = cairo_pdf)
+  } else {
+    trash <- wrap.plots.fanc(pl, plot.out = plot.out)
+  }
+  
 
   if (return.plot.list == T)
     return(pl)
@@ -1945,13 +2001,13 @@ a2bl.distro <- function(a2bl, summary.slot = "summary",
       gr$annotation <- gr$annotation %>% sub("Intron.+", "Intron", .)
       gr$annotation <- gr$annotation %>% sub("Exon.+", "Exon", .)
       df <- data.frame(gene = utilsFanc::gr.get.loci(gr), annotation = gr$annotation)
-      
+
       summ <- a2b[[summary.slot]]
       de.df <- lapply(c("up", "down"), function(type) {
         sub.df <- data.frame(gene = summ[[paste0(type, ".genes")]], deStat = type)
         return(sub.df)
       }) %>% Reduce(rbind, .)
-      
+
       df <- left_join(df, de.df)
       df$deStat[is.na(df$deStat)] <- "non_de"
       stats <- df %>% group_by(annotation, deStat) %>%
@@ -2005,25 +2061,25 @@ a2bl.distro.titrate.log2FC <- function(a2bl, df = NULL, mode = "pro_vs_enh",
   root <- tools::file_path_sans_ext(plot.out)
   plot.dir <- dirname(root)
   dir.create(plot.dir, recursive = T, showWarnings = F)
-  
+
   if (is.null(df)) {
-    
+
     if (mode == "pro_vs_enh") {
       group.col <- "proEnh"
     } else if (mode == "location") {
       group.col <- "annotation"
     }
-    
+
     df <- lapply(log2FC.vec, function(log2fc) {
       print(paste0("Processing log2fc: ", log2fc))
       a2bl <- deseq2.summary(pbl = a2bl, log2fc.cutoff = log2fc)
       a2bl <- a2bl.distro(a2bl = a2bl, genome = "mm10", mode = mode)
       saveRDS(a2bl, paste0(root, "_a2bl_log2fc", log2fc, ".Rds"))
-      
+
       stats <- lapply(a2bl, function(a2b) {
         stats <- a2b$summary[[mode]] %>%
-          dplyr::group_by(!!as.name(group.col)) %>% 
-          dplyr::mutate(log2fc = log2fc, cluster = a2b$root.name, pct = n/sum(n)) %>% 
+          dplyr::group_by(!!as.name(group.col)) %>%
+          dplyr::mutate(log2fc = log2fc, cluster = a2b$root.name, pct = n/sum(n)) %>%
           dplyr::ungroup() %>% as.data.frame()
         return(stats)
       }) %>% Reduce(rbind, .)
@@ -2066,18 +2122,18 @@ a2bl.distro.titrate.log2FC <- function(a2bl, df = NULL, mode = "pro_vs_enh",
           df$cluster <- factor(df$cluster, levels = rev(cluster.levels))
         }
         df$log2fc <- factor(df$log2fc, levels = unique(sort(df$log2fc)))
-        
+
         # df$annotation[grepl("Downstream", df$annotation)] <- "Downstream (<3kb)"
         # anno.levels <- c("Promoter", "5' UTR", "Exon", "Intron", "3' UTR", "Downstream (<3kb)", "Distal Intergenic")
         anno.levels <- c("Promoter", "5' UTR", "Exon", "Intron", "3' UTR",
-                         "Downstream (1-2kb)", "Downstream (<1kb)", "Downstream (2-3kb)", 
+                         "Downstream (1-2kb)", "Downstream (<1kb)", "Downstream (2-3kb)",
                          "Distal Intergenic")
         anno.levels <- anno.levels %>% .[. %in% df$annotation]
-        
+
         utilsFanc::check.intersect(df$annotation, "df$annotation", anno.levels, "anno.levels")
-        
+
         df$Annotation <- factor(df$annotation, levels = anno.levels)
-        
+
         p <- ggplot(df, aes(x = Annotation, y = pct)) +
           facet_grid(cluster ~ log2fc , switch = c("both")) +
           geom_bar(stat = "identity", aes(fill = Annotation)) +
@@ -2086,11 +2142,11 @@ a2bl.distro.titrate.log2FC <- function(a2bl, df = NULL, mode = "pro_vs_enh",
         # utilsFanc::gg_color_hue()
         p <- utilsFanc::theme.fc.1(p)
         p <- p + theme(legend.position = "right", plot.margin = unit(c(0, 0.12, 0, 0), "in"),
-                       strip.placement = "outside", axis.text.x = element_blank(), 
+                       strip.placement = "outside", axis.text.x = element_blank(),
                        axis.ticks.x = element_blank(), strip.background = element_blank())
         ggsave(paste0(root, "_", df$deStat[1], ".pdf"), p, device = cairo_pdf, height = 2, width = 5)
       }
-      
+
       return(p)
     })
   wrap.plots.fanc(plot.list = pl, sub.width = width, sub.height = height, plot.out = plot.out)
@@ -2194,7 +2250,7 @@ de.non.de <- function(pbl, out.dir, fc.th = 1.1, slot = "res.exp",
   return()
 }
 
-da.pileup.DAR <- function(summ.dir, clusters, 
+da.pileup.DAR <- function(summ.dir, clusters,
                           bws = NULL, bw.dir, use.all.bws = F,
                           n.peaks = 1000, seed = 42,
                           threads.clusters = 1, threads.each = 6,
@@ -2222,7 +2278,7 @@ da.pileup.DAR <- function(summ.dir, clusters,
         glob <- paste0(bw.dir, "/*.bw")
       else
         glob <- paste0(bw.dir, "/", cluster, "*")
-      
+
       bws <- Sys.glob(glob)
       if (length(bws) < 1) {
         stop(paste0("glob failed for: ", glob))
@@ -2230,9 +2286,9 @@ da.pileup.DAR <- function(summ.dir, clusters,
       return(bws)
     })
   }
-  
+
   names(bws) <- clusters
-  
+
   utilsFanc::safelapply(clusters, function(cluster) {
     deeptools.refpoint(bw.vec = bws[[cluster]], regions.vec = peaks[[cluster]],
                        threads = threads.each, out.dir = out.dir, root.name = cluster)
@@ -2443,7 +2499,7 @@ deseq2.cmp <- function(pbl.list, cmp.df, plot.out, summ.slot = "summary") {
       return(x.list.list)
     }) %>% Reduce(c, .)
   multi.venn(x.list.list = x.list.list,
-             plot.titles.vec = names(x.list.list), use.upset = T, 
+             plot.titles.vec = names(x.list.list), use.upset = T,
              height.sub = 800, width.sub = 800,
              out.file = plot.out)
   return(x.list.list)
@@ -2782,7 +2838,7 @@ da.footprint <- function(da, slot = "summary", direction = c("up", "down"),
 de.write.xls <- function(de, cluster.alias = NULL,
                          summ = "summary", slot = "res.exp",
                          cols = "all",
-                         out.file, 
+                         out.file,
                          append = F, prefix = NULL) {
   # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
   if (!append)
@@ -2799,12 +2855,12 @@ de.write.xls <- function(de, cluster.alias = NULL,
       cluster <- s2b$root.name
     }
     utilsFanc::t.stat(paste0("Processing Cluster: ", cluster))
-    
+
     df <- s2b[[slot]]
-    
+
     if (cols != "all")
       df <- df[, unique(c("gene", cols))]
-    
+
     lapply(c("up", "down"), function(direction) {
       genes <- s2b[[summ]][[paste0(direction, ".genes")]]
       df <- df %>% dplyr::filter(gene %in% genes) %>%
@@ -2813,7 +2869,7 @@ de.write.xls <- function(de, cluster.alias = NULL,
       if (grepl(":", df$gene[1])) {
         colnames(df)[1] <- "peak"
       }
-      
+
       if (!is.null(prefix)) {
         sheet <- paste0(prefix, "_", sheet)
       }
@@ -2836,9 +2892,9 @@ de.write.xls.all.genes <- function(de, cluster.alias = NULL,
   # cluster.alias: data.frame(name = "seurat_cluster_0", alias = "Neu")
   if (!append)
     system(paste0("rm -rf ", out.file))
-  
+
   dir.create(dirname(out.file), showWarnings = F, recursive = T)
-  
+
   lapply(de, function(s2b) {
     if (!is.null(cluster.alias)) {
       cluster <- cluster.alias %>% dplyr::filter(name == s2b$root.name) %>%
@@ -3028,7 +3084,7 @@ de.plot.bar.3 <- function(
 }
 
 da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
-                                bViolin = F, bBoxplot = F, bDot = F, 
+                                bViolin = F, bBoxplot = F, bDot = F,
                                 publication = F, publication.small = F,
                                 pt.size = 0.25, alpha = 0.4,
                                 slot = "res.exp", comps,
@@ -3075,7 +3131,7 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
     #   df <- data.frame(gene = utilsFanc::gr.get.loci(gr), motif = motif.name)
     #   return(df)
     # }, threads = threads.motif) %>% do.call(rbind, .)
-    
+
     df <- lapply(comps, function(comp) {
       if (comp == "beta") {
         if (level.fun == "max") {
@@ -3134,18 +3190,18 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
           }
           df$level <- droplevels(df$level)
           nlevels <- max(df$level_id)
-          df$quant <- paste0("(", round((df$level_id - 1) /nlevels, digits = 2), ",", 
+          df$quant <- paste0("(", round((df$level_id - 1) /nlevels, digits = 2), ",",
                              round(df$level_id / nlevels, digits = 2), "]")
           df$quant <- sub("\\(0\\.0,", "[0.0,", df$quant)
           df[, value][df[, value] > violin.ceiling] <- violin.ceiling
           df[, value][df[, value] < violin.floor] <- violin.floor
-          
+
           n.stats <- df[, c("quant", "motif")] %>% table()
           n.out <- paste0(plot.dir, "/", root.name, "_", df$cluster[1], "_", df$comp[1], "_n_numbers.csv")
           dir.create(dirname(n.out), showWarnings = F, recursive = T)
           write.csv(n.stats, n.out)
-          
-          p <- ggplot(df, aes_string(x = "quant", y = value)) 
+
+          p <- ggplot(df, aes_string(x = "quant", y = value))
           if (publication) {
             if (bViolin) {
               p <- p + geom_violin()
@@ -3157,13 +3213,13 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
                 rstatix::add_significance("p.adj")
               stat.test <- stat.test %>%
                 rstatix::add_xy_position(x = "quant", dodge = 0.8)
-              
+
               p <- p + geom_boxplot(
                 aes(color = motif), size = 0.2,
                 outlier.size = 0, outlier.stroke = 0, outlier.shape = 18) +
                 geom_jitter(aes(color = motif, fill = motif), size = pt.size, stroke = 0.03, shape = 18,
                             position = position_jitterdodge(jitter.width = 0.25), alpha = alpha) +
-                ggpubr::stat_pvalue_manual(stat.test,  label = "p.adj.signif", tip.length = 0, 
+                ggpubr::stat_pvalue_manual(stat.test,  label = "p.adj.signif", tip.length = 0,
                                            size = 10, label.size = 2) +
                 scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
               p <- p +  ggtitle(paste0(df$cluster[1], "  ", df$comp[1]))
@@ -3180,13 +3236,13 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
               rstatix::add_significance("p.adj")
             stat.test <- stat.test %>%
               rstatix::add_xy_position(x = "quant", dodge = 0.8)
-            
+
             p <- p + geom_boxplot(
               aes(color = motif), size = 0.2,
               outlier.size = 0, outlier.stroke = 0, outlier.shape = 18) +
               geom_jitter(aes(color = motif, fill = motif), size = 0.5, stroke = 0.03, shape = 18,
                           position = position_jitterdodge(jitter.width = 0.25), alpha = 0.4, show.legend = F) +
-              ggpubr::stat_pvalue_manual(stat.test,  label = "p.adj.signif", tip.length = 0, 
+              ggpubr::stat_pvalue_manual(stat.test,  label = "p.adj.signif", tip.length = 0,
                                          size = 10, label.size = 2) +
               scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
             p <- p +  ggtitle(paste0(df$cluster[1], "  ", df$comp[1]))
@@ -3203,7 +3259,7 @@ da.motif.foldChange <- function(da, peak.motif.df, motifs.use = NULL,
           return(p)
         })
     }) %>% Reduce(c, .)
-    wrap.plots.fanc(plot.list = pl.violin, 
+    wrap.plots.fanc(plot.list = pl.violin,
                     plot.out = paste0(plot.dir, "/", root.name, "_", ifelse(bViolin, "violin", "boxPlot"), ".png"),
                     sub.width = width, sub.height = height, n.col = n.col)
   }
@@ -3322,8 +3378,14 @@ da.motif.pileup <- function(da, subset.n = 1000, seed = 42,
 
 de.plot.bar.2 <- function(de, genes, cluster = 1, color.by, color.levels = NULL,
                           shape.by = NULL,
+                          spread.width = 0.3, spread.bin.size = 100,
+                          pt.size = 0.8,
                           wrap.n = NULL,
-                          plot.out) {
+                          plot.out = NULL,
+                          add.pval = T, pval.group.1 = NULL, pval.group.2,
+                          external.p.df = NULL,
+                          no.legend = F,
+                          ...) {
 
   genes <- genes %>% .[. %in% de[[cluster]]$res.exp$gene]
   if (length(genes) < 1) {
@@ -3342,14 +3404,21 @@ de.plot.bar.2 <- function(de, genes, cluster = 1, color.by, color.levels = NULL,
         bar.df[, color.by] <- factor(bar.df[, color.by], levels = color.levels)
       }
       n.genes <- bar.df$gene %>% unique() %>% length()
-      dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+      
       p <- utilsFanc::barplot.pub.3(df = bar.df, x = "gene", y = "expr",
-                                    color.by = color.by,
-                                    shape.by = shape.by,
-                                    pt.size = 0.8,
-                                    spread.bin.size = 100,
-                                    bar.width = 0.6, dodge.width = 0.8, spread.width = 0.3) %>%
+                         color.by = color.by,
+                         shape.by = shape.by,
+                         pt.size = pt.size,
+                         spread.bin.size = spread.bin.size,
+                         bar.width = 0.6, dodge.width = 0.8, spread.width = spread.width,
+                         add.pval = add.pval, pval.group.1 = pval.group.1, pval.group.2 = pval.group.2, 
+                         external.p.df = external.p.df,
+                         ...) %>%
         utilsFanc::theme.fc.1()
+      
+      if (no.legend) {
+        p <- p + theme(legend.position = "none")
+      }
       return(p)
     })
   if (length(pl) > 1) {
@@ -3357,9 +3426,12 @@ de.plot.bar.2 <- function(de, genes, cluster = 1, color.by, color.levels = NULL,
   } else {
     p <- pl[[1]]
   }
-  ggsave(plot.out, p, device = cairo_pdf,
-         width = 0.5 * length(genes), height = 3 * length(unique(f)))
+  if (!is.null(plot.out)) {
+    dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+    ggsave(plot.out, p, device = cairo_pdf,
+           width = 0.5 * length(genes), height = 3 * length(unique(f)))
 
+  }
   invisible(p)
 }
 
@@ -3498,7 +3570,7 @@ de.add.promoter <- function(de, gtf.gr, slot = "summary",
   return(de)
 }
 
-de.add.promoter.all.genes <- function(de, gtf.gr, promoter.slot.name = "promoter", 
+de.add.promoter.all.genes <- function(de, gtf.gr, promoter.slot.name = "promoter",
                                       out.dir = NULL, root.name = NULL) {
   stop("Not finished/tested")
   if (!is.null(out.dir)) {
@@ -3533,7 +3605,7 @@ gene.promoter.map <- function(genes, gtf.gr) {
   #   pros <- pros %>% split(f = pros$gene) %>% lapply(function(gr) {
   #     gene <- gr$gene[1]
   #     gr <- GenomicRanges::reduce()
-  ##### it is impractical to collapse for each gene. What if the 2 intervals for each gene do not 
+  ##### it is impractical to collapse for each gene. What if the 2 intervals for each gene do not
   # overlap to begin with?
   #   })
   # }
@@ -3569,7 +3641,7 @@ da.add.anno <- function(da, genome, slot = "summary",
   })
 }
 
-de.add.bg <- function(de, slot = "summary", 
+de.add.bg <- function(de, slot = "summary",
                       n.bg.each = 25, split.into.folds = F, split.into.folds.random.seed = 42,
                       no.replace = F,
                       samples.for.bg, scatter.xy.df, scatter.meta = NULL,
@@ -3624,7 +3696,7 @@ de.add.bg <- function(de, slot = "summary",
       set.seed(seed = split.into.folds.random.seed)
       bg <- lapply(bg, function(x) {
         if(length(x) > 1) {
-          x <- sample(x, size = length(x), replace = F) # shuffle x 
+          x <- sample(x, size = length(x), replace = F) # shuffle x
           f <- cut(1:length(x), breaks = n.bg.each) %>% as.numeric()
           x <- split(x, f = f)
           names(x) <- paste0("fold", names(x))
@@ -3634,7 +3706,7 @@ de.add.bg <- function(de, slot = "summary",
           names(x) <- paste0("fold", 1:length(x))
           return(x)
         }
-        
+
       })
     }
     s2b[[slot]]$bg <- bg
@@ -3643,7 +3715,7 @@ de.add.bg <- function(de, slot = "summary",
   return(de)
 }
 
-de.add.bg.validate <- function(de, slot = "summary", n.folds, 
+de.add.bg.validate <- function(de, slot = "summary", n.folds,
                                cols.check = c("no.overlap", "split.into.folds", "number.match.fg", "n.folds.match")) {
   # this is to validate that a de object generated by de.add.bg() has valid slots
   de.slot.assert(de, is.s2b = F, slot = slot)
@@ -3654,23 +3726,23 @@ de.add.bg.validate <- function(de, slot = "summary", n.folds,
                         no.overlap = NA, split.into.folds = NA, number.match.fg = NA,
                         n.folds.match = NA)
       bg <- s2b[[slot]]$bg[[direction]]
-      
+
       if (is.null(bg)) {
         out$bg.exists <- F
       } else {
         out$bg.exists <- T
-        
+
         if (length(unlist(bg)) < 1) {
           out$not.empty <- F
         } else {
           out$not.empty <- T
-          
+
           if (any(duplicated(unlist(bg)))) {
             out$no.overlap <- F
           } else {
             out$no.overlap <- T
           }
-          
+
           if (any(!grepl("^fold\\d+$", names(bg)))) {
             out$split.into.folds <- F
           } else {
@@ -3687,7 +3759,7 @@ de.add.bg.validate <- function(de, slot = "summary", n.folds,
             } else {
               out$n.folds.match <- F
             }
-            
+
           }
         }
       }
@@ -3696,7 +3768,7 @@ de.add.bg.validate <- function(de, slot = "summary", n.folds,
   }) %>% do.call(rbind, .)
   rownames(assess.df) <- NULL
   utilsFanc::check.intersect(cols.check, "cols.check", colnames(assess.df), "colnames(assess.df)")
-  
+
   lapply(cols.check, function(col.check) {
     names <- paste0(assess.df$cluster, "_", assess.df$direction)
     vec <- assess.df[, col.check]
@@ -3708,13 +3780,13 @@ de.add.bg.validate <- function(de, slot = "summary", n.folds,
                   paste0(failed, collapse = "\n")))
     }
   })
-  
+
   return(assess.df)
 }
 
 de.bg.expand <- function(de, slot = "summary", n.folds,
                          cols.check = c("no.overlap", "split.into.folds", "number.match.fg", "n.folds.match")) {
-  # change from s2b$summary$bg$up$fold1 to s2b$fold1$up.genes. Basically changing it 
+  # change from s2b$summary$bg$up$fold1 to s2b$fold1$up.genes. Basically changing it
   # to the same format as summary.
   de.add.bg.validate(de = de, slot = slot, n.folds = n.folds, cols.check = cols.check)
   de <- lapply(de, function(s2b) {
@@ -3742,11 +3814,11 @@ de.bg.expand <- function(de, slot = "summary", n.folds,
       if (!identical(new, old)) {
         stop(paste0("Failed checking at: ", s2b$root.name))
       }
-      
+
     })
   })
   return(de)
-  
+
 }
 
 de.motif.n <- function(de, peak.motif.df,
@@ -3766,14 +3838,14 @@ de.motif.n <- function(de, peak.motif.df,
   # binarize: for each gene, instead of counting how many AP1 motifs it has, we only
   # count whether it has an AP1 motif at all. We then normalize through dividing by the total number of genes in the group
   # normalize: sum(# of peaks in the group with the motif)/sum(# of peaks in the group)
-  
+
   if (is.null(root.name)) root.name <- basename(work.dir)
   if (binarize && normalize) {
     stop("binarize and normalize can't be used together!")
   }
   if (binarize) root.name <- paste0(root.name, "_bin")
   if (normalize) root.name <- paste0(root.name, "_norm")
-  
+
   # check.list <- list(motifs.use = motifs.use, method = method,
   #                    distance.1side = distance.1side)
   # lapply(names(check.list), function(name) {
@@ -3819,9 +3891,9 @@ de.motif.n <- function(de, peak.motif.df,
       method = method, distance.1side = distance.1side)
     if (return.gene.motif.df) return(gene.motif.df)
   }
-  
+
   if (is.null(motifs.use)) motifs.use <- gene.motif.df$motif %>% unique()
-  
+
   j <- lapply(de, function(s2b) {
     if (is.null(s2b[[slot]])) return()
     j <- lapply(directions, function(direc) {
@@ -3836,8 +3908,9 @@ de.motif.n <- function(de, peak.motif.df,
       if (with.replacement) {
         bg.df <- lapply(1:n.bg.sets, function(bg.id) {
           set.seed(seed = seed + bg.id)
+          bg.selected <- sample(bg, length(fg), replace = F)
           df <- data.frame(group = paste0("bg", bg.id),
-                           gene = sample(bg, length(fg), replace = F))
+                           gene = bg.selected)
         }) %>% do.call(rbind, .)
       } else {
         stop("only with.replacement = T has been developed")
@@ -3868,13 +3941,13 @@ de.motif.n <- function(de, peak.motif.df,
           write.table(to.write, paste0(prefix, "_normFactors_", x, ".tsv"),
                       quote = F, sep = "\t", row.names = F, col.names = T)
         })
-        
+
       }
-      
+
       # Inner join seems wrong. However, the lost genes will be later "reclaimed"
       # using tidyr::comlete.
       j <- dplyr::inner_join(df, gene.motif.df, by = "gene", relationship = "many-to-many")
-      
+
       # df1 <- data.frame(group = c("a", "b", "c"), gene = c("gene1", "gene2", "gene2"))
       # df2 <- data.frame(gene = c("gene1","gene2", "gene2"), motif = c("motif1", "motif1", "motif2"))
       # Browse[1]>       inner_join(df1, df2, by = "gene")
@@ -3897,7 +3970,7 @@ de.motif.n <- function(de, peak.motif.df,
 # 13    fg    Klf9 CEBP.AP1                         chr19:23134768-23135268,chr19:23139947-23140447 2
 # 15    fg   Ddit4 CEBP.AP1                         chr10:59943420-59943920,chr10:59952456-59952956 2
 # 21    fg    Lifr CEBP.AP1                             chr15:7092935-7093435,chr15:7128667-7129167 2
-      
+
       if (write.bed) {
         if (is.null(motifs.write.plot)) {
           motifs.write.plot <- j$motif %>% unique()
@@ -3962,7 +4035,7 @@ de.motif.n <- function(de, peak.motif.df,
       # 4   bg3 CDX4.Homeobox_31    <NA> 0                     <NA>
       # 5   bg4 CDX4.Homeobox_31 Cysltr1 1 chrX:106603313-106603813
       # 6   bg5 CDX4.Homeobox_31    <NA> 0                     <NA>
-      
+
       j <- j %>% dplyr::group_by(group, motif)
       #>>>>>>>>>>>>>>>>>>>>>> Summarizing starts here. j no longer holds peak-level info.
 
@@ -3971,7 +4044,7 @@ de.motif.n <- function(de, peak.motif.df,
       } else {
         j <- j %>% dplyr::summarise(n = sum(n))
       }
-        
+
       j <- j %>% dplyr::ungroup() %>% as.data.frame()
       j <- utilsFanc::factor2character.fanc(j)
 
@@ -3990,7 +4063,7 @@ de.motif.n <- function(de, peak.motif.df,
       }
 
       j <- cbind(data.frame(cluster = s2b$root.name, direc = direc), j)
-      
+
       stats <- j %>% split(., f = .$motif) %>% lapply(function(j) {
         bg <- j %>% dplyr::filter(grepl("bg", group)) %>% dplyr::pull(mean)
         fg <- j %>% dplyr::filter(group == "fg") %>% dplyr::pull(mean)
@@ -4021,7 +4094,7 @@ de.motif.n <- function(de, peak.motif.df,
         motifs.w.na.zscore <- stats$motif[is.na(stats$z)] %>% unique()
         motifs.w.na.zscore <- paste0(motifs.w.na.zscore, collapse = " ")
         stats.plot <- stats[!is.na(stats$z),]
-        
+
         p <- xy.plot(df = stats.plot, x = "rank", y = "z", pt.size = 0.2,
                      label.var = "motif", label.values = motifs.label, use.repel = T, text.size = 2,
                      add.abline = F, highlight.var = "motif", highlight.values = motifs.label,
@@ -4059,6 +4132,24 @@ de.motif.n <- function(de, peak.motif.df,
   write.table(arrange(j, motif), paste0(work.dir, "/", root.name, "_j.tsv"),
               sep = "\t", quote = F, row.names = F, col.names = T)
   invisible(j)
+}
+
+de.motif.n.rank.plot <- function(z.tsv, motifs.label, title = NULL,
+                                 plot.out, height = 1, width = 1,
+                                 use.repel = T,
+                                 ...) {
+  zdf <- read.table(z.tsv, header = T, sep = "\t")
+  p <- xy.plot(df = zdf, x = "rank", y = "z", y.lab = "z-score",
+               pt.size = 0.1, highlight.ptsize = 0.1, 
+               label.var = "motif", label.values = motifs.label, use.repel = use.repel, 
+               text.size = 2, 
+               add.abline = F, highlight.var = "motif", highlight.values = motifs.label,
+               plotly.var = "motif", plotly.label.all = T, title = title, ...) %>% 
+    utilsFanc::theme.fc.1(rm.x.ticks = F, italic.x = F, font = NULL)
+
+  dir.create(dirname(plot.out), showWarnings = F, recursive = T)
+  ggsave(plot.out, p, device = pdf, height = height, width = width)
+  invisible(p)
 }
 
 de.filter.close.genes <- function(de, gtf, slot = "summary", cutoff = 100000) {
@@ -4129,46 +4220,46 @@ de.fake.sc.from.bulk <- function(de.bulk, de.sc) {
 #       stop("No shared clusters found that are specified by clusters.use")
 #     }
 #   }
-#   
+#
 #   stat <- lapply(clusters, function(cluster) {
 #     s1 <- de1[[cluster]]
 #     if (!slot %in% names(s1)) {
 #       stop("slot not found")
 #     }
 #     s2 <- de2[[cluster]]
-#     
+#
 #     stat <- lapply(c("up", "down"), function(type) {
 #       genes <- s1[[slot]][[paste0(type, ".genes")]]
 #       n <- length(genes)
 #       genes.intsct <- genes %>% .[. %in% s2$bulkNorm$gene]
 #       n.intsct <- length(genes.intsct)
-#       
-#       trend.df1 <- s1$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>% 
+#
+#       trend.df1 <- s1$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>%
 #         dplyr::select(gene, log2FoldChange)
 #       names(trend.df1) <- c("gene", "log2fc1")
-#       trend.df2 <- s2$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>% 
+#       trend.df2 <- s2$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>%
 #         dplyr::select(gene, log2FoldChange)
 #       names(trend.df2) <- c("gene", "log2fc2")
-#       
+#
 #       trend.df <- trend.df1 %>% dplyr::left_join(trend.df2, by = "gene")
-# 
+#
 #       trend.df$is.same.trend <- (trend.df$log2fc1 * trend.df$log2fc2) > 0
-#       
+#
 #       n.trend <- sum(trend.df$is.same.trend)
 #       pct.trend <- round(n.trend/n.intsct, digits = 3)
-#       
+#
 #       stat <- data.frame(cluster = cluster, type = type, n = n, n.intsct = n.intsct, n.trend = n.trend,
-#                          pct.trend = pct.trend, 
+#                          pct.trend = pct.trend,
 #                          genes.trend = paste0(trend.df$gene[trend.df$is.same.trend], collapse = ","),
 #                          genes.oppo = paste0(trend.df$gene[!trend.df$is.same.trend], collapse = ","))
 #       return(stat)
 #     }) %>% do.call(rbind, .)
 #     return(stat)
 #   }) %>% do.call(rbind, .)
-#   
+#
 #   if (!is.null(out.file)) {
 #     dir.create(dirname(out.file), showWarnings = F, recursive = T)
-#     write.table(stat, out.file, quote = F, sep = "\t", 
+#     write.table(stat, out.file, quote = F, sep = "\t",
 #                 row.names = F, col.names = T)
 #   }
 #   return(stat)
@@ -4181,11 +4272,11 @@ de.trend.cmp <- function(de1, de2, clusters.1 = NULL, clusters.2 = NULL, slot = 
     clusters.1 <- names(de1)
   if (is.null(clusters.2))
     clusters.2 <- names(de2)
-  
+
   utilsFanc::check.intersect(clusters.1, "clusters.1", names(de1), "names(de1)")
   utilsFanc::check.intersect(clusters.2, "clusters.2", names(de2), "names(de2)")
-  
-  
+
+
   stat <- lapply(clusters.1, function(cluster.1) {
     lapply(clusters.2, function(cluster.2) {
       s1 <- de1[[cluster.1]]
@@ -4193,30 +4284,30 @@ de.trend.cmp <- function(de1, de2, clusters.1 = NULL, clusters.2 = NULL, slot = 
         stop("slot not found")
       }
       s2 <- de2[[cluster.2]]
-      
+
       stat <- lapply(c("up", "down"), function(type) {
         genes <- s1[[slot]][[paste0(type, ".genes")]]
         n <- length(genes)
         genes.intsct <- genes %>% .[. %in% s2$bulkNorm$gene]
         n.intsct <- length(genes.intsct)
-        
-        trend.df1 <- s1$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>% 
+
+        trend.df1 <- s1$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>%
           dplyr::select(gene, log2FoldChange)
         names(trend.df1) <- c("gene", "log2fc1")
-        trend.df2 <- s2$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>% 
+        trend.df2 <- s2$res.exp %>% dplyr::filter(gene %in% genes.intsct) %>%
           dplyr::select(gene, log2FoldChange)
         names(trend.df2) <- c("gene", "log2fc2")
-        
+
         trend.df <- trend.df1 %>% dplyr::left_join(trend.df2, by = "gene")
-        
+
         trend.df$is.same.trend <- (trend.df$log2fc1 * trend.df$log2fc2) > 0
-        
+
         n.trend <- sum(trend.df$is.same.trend)
         pct.trend <- round(n.trend/n.intsct, digits = 3)
-        
+
         stat <- data.frame(cluster.1 = cluster.1, cluster.2 = cluster.2,
                            type = type, n = n, n.intsct = n.intsct, n.trend = n.trend,
-                           pct.trend = pct.trend, 
+                           pct.trend = pct.trend,
                            genes.trend = paste0(trend.df$gene[trend.df$is.same.trend], collapse = ","),
                            genes.oppo = paste0(trend.df$gene[!trend.df$is.same.trend], collapse = ","))
         return(stat)
@@ -4224,10 +4315,10 @@ de.trend.cmp <- function(de1, de2, clusters.1 = NULL, clusters.2 = NULL, slot = 
       return(stat)
     }) %>% do.call(rbind, .) %>% return()
   }) %>% do.call(rbind, .)
-  
+
   if (!is.null(out.file)) {
     dir.create(dirname(out.file), showWarnings = F, recursive = T)
-    write.table(stat, out.file, quote = F, sep = "\t", 
+    write.table(stat, out.file, quote = F, sep = "\t",
                 row.names = F, col.names = T)
   }
   return(stat)
@@ -4262,12 +4353,12 @@ de.violin <- function(de, geneset.list, plot.out, quantile.filter = NULL, ...) {
         q <- quantile(rowMaxs(expr), quantile.filter)
         exp <- exp[rowMaxs(expr) <= q, ]
       }
-      
+
       exp <- reshape2::melt(exp, id.vars = "gene", variable.name = "sample", value.name = "expr")
-      
+
       p <- ggplot(exp, aes(x = sample, y = expr)) +
         geom_jitter(size = 0.1) +
-        geom_violin(alpha = 0.5) + 
+        geom_violin(alpha = 0.5) +
         ggtitle(paste0(cluster, " ", geneset.name)) +
         theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
       return(p)
@@ -4279,7 +4370,7 @@ de.violin <- function(de, geneset.list, plot.out, quantile.filter = NULL, ...) {
 }
 
 
-de.chip.candidate <- function(de, da, clusters = NULL, genome, 
+de.chip.candidate <- function(de, da, clusters = NULL, genome,
                               summary.slot = "summary", res.slot = "res.exp",
                               nonDA.threshold = 0.1,
                               fg.peaks.include = NULL,
@@ -4289,7 +4380,7 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
                               chip.beds = NULL, chip.beds.join.mode = "any",
                               out.dir, root = NULL) {
   # written for the Baf155 KO project. So the foreground are down DARs/down DEGs.
-  # if you have multiple motif bed files, "any" means that a motif instance is 
+  # if you have multiple motif bed files, "any" means that a motif instance is
   # considered as long as it appears in at least one of the motif bed files
   # "all" means that it needs to appear at all bed files.
   if (is.null(root)) root <- basename(out.dir)
@@ -4300,15 +4391,15 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
   if (length(clusters.avail) == 0) {
     stop("length(clusters.avail) == 0")
   }
-  
+
   utilsFanc::check.intersect(clusters, "clusters", clusters.avail, "clusters.avail")
   xlsx <- paste0(out.dir, "/", root, "_", paste0(clusters, collapse = "_") ,".xlsx")
   system(paste0("rm -rf ", xlsx))
-  
+
   stats <- lapply(clusters,function(cluster) {
     s2b.e <- de[[cluster]]
     s2b.a <- da[[cluster]]
-    
+
     if (is.null(s2b.a[[summary.slot]])) {
       stop("is.null(s2b.a[[summary.slot]])")
     }
@@ -4326,16 +4417,16 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
     gr.all <- gr.all %>% utilsFanc::loci.2.df(loci.col.name = "gene", remove.loci.col = T, return.gr = T)
     gr.all$peak <- utilsFanc::gr.get.loci(gr.all)
     gr.all <- utilsFanc::gr.fast.annot(obj = gr.all, genome = genome, use.klraps = F)
-    
-    
+
+
     # filter for those overlapping chip
     if (!is.null(chip.beds)) {
       if (chip.beds.join.mode == "any") {
-        chip.gr <- lapply(chip.beds, utilsFanc::import.bed.fanc, return.gr = T) %>% 
+        chip.gr <- lapply(chip.beds, utilsFanc::import.bed.fanc, return.gr = T) %>%
           Reduce(c, .)
         gr.all <- gr.all %>% subsetByOverlaps(chip.gr)
       } else if (chip.beds.join.mode == "all") {
-        chip.gr <- lapply(chip.beds, utilsFanc::import.bed.fanc, return.gr = T) %>% 
+        chip.gr <- lapply(chip.beds, utilsFanc::import.bed.fanc, return.gr = T) %>%
           Reduce(plyranges::join_overlap_intersect, .)
         gr.all <- gr.all %>% subsetByOverlaps(chip.gr)
       } else {
@@ -4346,7 +4437,7 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
     # filter for those overlapping motif
     if (!is.null(motif.beds)) {
       if (motif.beds.join.mode == "any") {
-        motif.gr <- lapply(motif.beds, utilsFanc::import.bed.fanc, return.gr = T) %>% 
+        motif.gr <- lapply(motif.beds, utilsFanc::import.bed.fanc, return.gr = T) %>%
           Reduce(c, .)
         gr.all <- gr.all %>% subsetByOverlaps(motif.gr)
       } else {
@@ -4354,14 +4445,14 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
       }
     }
     stats$n.motif <- length(gr.all)
-    
+
     # fg: filter by downDAR
     gr.fg <- gr.all[gr.all$peak %in% s2b.a[[summary.slot]][["down.genes"]]]
     stats$n.fg.downDAR <- length(gr.fg)
     # filter for down DARs that are assigned to downDEGs
     gr.fg <- gr.fg[gr.fg$SYMBOL %in% s2b.e[[summary.slot]][["down.genes"]]]
     stats$n.fg.downDEG <- length(gr.fg)
-    
+
     if (!is.null(fg.peaks.include)) {
       gr.fg <- gr.fg %>% subsetByOverlaps(utilsFanc::loci.2.gr(fg.peaks.include), invert = F)
       stats$n.fg.peaks.include <- length(gr.fg)
@@ -4370,14 +4461,14 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
       gr.fg <- gr.fg %>% subsetByOverlaps(utilsFanc::loci.2.gr(fg.peaks.exclude), invert = T)
       stats$n.fg.peaks.exclude <- length(gr.fg)
     }
-    
+
     stats$n.fg <- length(gr.fg)
-    
+
     gr.fg <- gr.fg[utilsFanc::sort.by(gr.fg$SYMBOL, s2b.e[[summary.slot]][["down.genes"]], return.order = T)]
-    
+
     utilsFanc::write.zip.fanc(gr.fg, out.file = paste0(out.dir, "/", root, "_", cluster, "_fg.bed"),
                               bed.shift = T)
-    xlsx::write.xlsx2(utilsFanc::gr2df(gr.fg), xlsx, 
+    xlsx::write.xlsx2(utilsFanc::gr2df(gr.fg), xlsx,
                       sheetName = paste0(cluster, "_DAR"), append = T, col.names = T, row.names = T)
 
     ### background (those not changing)
@@ -4385,24 +4476,24 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
     stats$n.bg.nonDA <- length(gr.bg)
     # assigned to upDEGs instead:
     gr.bg <- gr.bg[gr.bg$SYMBOL %in% s2b.e[[summary.slot]][["up.genes"]]]
-    
+
     stats$n.bg.upDEG <- length(gr.bg)
-    
+
     if (!is.null(bg.peaks.exclude)) {
       gr.bg <- gr.bg %>% subsetByOverlaps(utilsFanc::loci.2.gr(bg.peaks.exclude), invert = T)
       stats$n.bg.peaks.exclude <- length(gr.bg)
     }
-    
+
     stats$n.bg <- length(gr.bg)
-    
+
     utilsFanc::write.zip.fanc(gr.bg, out.file = paste0(out.dir, "/", root, "_", cluster, "_bg.bed"),
                               bed.shift = T)
-    xlsx::write.xlsx2(utilsFanc::gr2df(gr.bg), xlsx, 
+    xlsx::write.xlsx2(utilsFanc::gr2df(gr.bg), xlsx,
                       sheetName = paste0(cluster, "_ctrl"), append = T, col.names = T, row.names = T)
-    
+
     stats <- as.data.frame(stats)
   }) %>% do.call(rbind, .)
-  write.table(stats, paste0(out.dir, "/", root, "_stats.tsv"), row.names = F, col.names = T, 
+  write.table(stats, paste0(out.dir, "/", root, "_stats.tsv"), row.names = F, col.names = T,
               sep = "\t", quote = F)
   return(stats)
 }
@@ -4410,7 +4501,7 @@ de.chip.candidate <- function(de, da, clusters = NULL, genome,
 da.write.peakset <- function(da, out.dir, root = NULL, threads = 1) {
   if (is.null(root)) root <- basename(out.dir)
   utilsFanc::safelapply(da, function(a2b) {
-    utilsFanc::write.zip.fanc(rownames(a2b$bulk.mat) %>% utilsFanc::loci.2.gr(), 
+    utilsFanc::write.zip.fanc(rownames(a2b$bulk.mat) %>% utilsFanc::loci.2.gr(),
                               out.file = paste0(out.dir, "/", root, "_", a2b$root.name, ".bed"))
   }, threads = threads)
 }
@@ -4428,21 +4519,21 @@ da.motif.intersect <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each_
     rtracklayer::import(motif.file)
   })
   names(motifs.grl) <- names(motifs)
-  
+
   utilsFanc::safelapply(da, function(a2b) {
     peaks <- rownames(a2b$bulk.mat) %>% utilsFanc::loci.2.gr()
     lapply(names(motifs.grl), function(motif.name) {
       motif.gr <- motifs.grl[[motif.name]]
       motif.in.peaks <- subsetByOverlaps(motif.gr, peaks, ignore.strand = T)
-      
+
       utilsFanc::write.zip.fanc(
-        motif.in.peaks, 
+        motif.in.peaks,
         out.file = paste0(out.dir, "/", root, "_", a2b$root.name, "_", motif.name, ".bed"))
-      
+
     })
-    
+
   }, threads = threads)
-  
+
 }
 
 da.motif.pct.by.size <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each_motif/",
@@ -4463,20 +4554,20 @@ da.motif.pct.by.size <- function(da, motifs, motif.dir = "~/motifs/homer/sth/eac
     rtracklayer::import(motif.file)
   })
   names(motifs.grl) <- names(motifs)
-  
+
   utilsFanc::safelapply(da, function(a2b) {
     peaks <- a2b$bulkNorm$gene %>% utilsFanc::loci.2.gr()
     peaks$size <- a2b$bulkNorm[, samples.bg, drop = F] %>% utilsFanc::pmean()
     peaks$cut <- gtools::quantcut(peaks$size, n.cut)
     peaks$cut.level <- peaks$cut %>% as.integer()
-    
+
     df <- lapply(names(motifs.grl), function(motif.name) {
       motif.gr <- motifs.grl[[motif.name]]
       o <- findOverlaps(peaks, motif.gr, ignore.strand = T)
       o <- queryHits(o) %>% unique()
       tab.o <- table(peaks[o]$cut)
       tab.all <- table(peaks$cut)
-      round(tab.o/tab.all, digits = 3) 
+      round(tab.o/tab.all, digits = 3)
     }) %>% Reduce(cbind, .)
     colnames(df) <- names(motifs.grl)
     df <- as.data.frame(df)
@@ -4486,7 +4577,7 @@ da.motif.pct.by.size <- function(da, motifs, motif.dir = "~/motifs/homer/sth/eac
     write.table(df, file, quote = F, row.names = F, col.names = T, sep = "\t")
     return()
   }, threads = threads)
-  
+
 }
 
 da.motif.in.dar.pct <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each_motif/",
@@ -4503,12 +4594,12 @@ da.motif.in.dar.pct <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each
     rtracklayer::import(motif.file)
   })
   names(motifs.grl) <- names(motifs)
-  
+
   stats <- utilsFanc::safelapply(da, function(a2b) {
     summ <- a2b[[summary.slot]]
     if (is.null(summ)) stop(paste0("Summary slot not fount: ", summary.slot))
     peaks <- a2b$bulkNorm$gene %>% utilsFanc::loci.2.gr()
-    
+
     stats <- lapply(dar.types, function(dar.type) {
       dars <- summ[[paste0(dar.type, ".genes")]] %>% utilsFanc::loci.2.gr()
       pct.bg <- round(length(dars)/length(peaks), digits = 3)
@@ -4518,9 +4609,9 @@ da.motif.in.dar.pct <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each
         motif.in.peaks <- subsetByOverlaps(motif.gr, peaks, ignore.strand = T)
         motif.in.dars <- subsetByOverlaps(motif.in.peaks, dars, ignore.strand = T)
         stats <- data.frame(
-          cluster = a2b$root.name, 
-          motif = motif.name, 
-          type = dar.type, 
+          cluster = a2b$root.name,
+          motif = motif.name,
+          type = dar.type,
           n.in.peaks = length(motif.in.peaks),
           n.in.dars = length(motif.in.dars),
           pct.in.dars = round(length(motif.in.dars)/length(motif.in.peaks), digits = 3),
@@ -4538,8 +4629,8 @@ da.motif.in.dar.pct <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each
   file <- paste0(out.dir, "/", root, "_motif_in_da.tsv")
   dir.create(out.dir, showWarnings = F, recursive = T)
   write.table(stats, file, quote = F, row.names = F, col.names = T, sep = "\t")
-  
-  df <- stats %>% split(., f = .$cluster) %>% 
+
+  df <- stats %>% split(., f = .$cluster) %>%
     lapply(function(stats) {
       stats %>% split(., f = .$type) %>% lapply(function(stats){
         df <- stats[, c("motif", "pct.in.dar")]
@@ -4549,11 +4640,11 @@ da.motif.in.dar.pct <- function(da, motifs, motif.dir = "~/motifs/homer/sth/each
         return(df)
       }) %>% do.call(rbind, .) %>% return()
     }) %>% do.call(rbind, .) %>% return()
-  
+
   # df %>% split(., f = .$type) %>% lapply(function(df){
-  #   df <- 
+  #   df <-
   # })
-  
+
   invisible(stats)
 }
 
@@ -4568,16 +4659,16 @@ de.simplify.seurat.clusters <- function(de) {
 
 de.filter.by.overlaps <- function(de1, de2, slot, slot.out, promoter.ext.1side = 500, invert = F) {
   # example: ~/hmtp/scAR/spbm2/DC4.2
-  # returns de1, with the slot (usually summary) modified to retain only those 
+  # returns de1, with the slot (usually summary) modified to retain only those
   # that are also in de2$s2b$slot. This will be written to slot.out
   clusters <- intersect(names(de1), names(de2))
   if (length(clusters) < 1) stop("length(clusters) < 1")
-  
+
   de1 <- de1[clusters]
   de2 <- de2[clusters]
   de.slot.assert(de1, slot = slot)
   de.slot.assert(de2, slot = slot)
-  
+
   de1 <- lapply(clusters, function(cluster) {
     s2b1 <- de1[[cluster]]
     s2b2 <- de2[[cluster]]
@@ -4585,20 +4676,20 @@ de.filter.by.overlaps <- function(de1, de2, slot, slot.out, promoter.ext.1side =
       if (de.type(de1) == "de" && de.type(de2) == "da") {
         pros <- s2b1[[slot]]$promoters[[direc]]
         if (is.null(pros)) {
-          stop(paste0("promoter slot empty for ", names(des)[bG], 
+          stop(paste0("promoter slot empty for ", names(des)[bG],
                       ", cluster ", cluster,", slot ", slot))
         }
         peaks <- s2b2[[slot]][[paste0(direc, ".genes")]]
-        pros <- GenomicRanges::resize(pros, width = 2 * promoter.ext.1side, 
+        pros <- GenomicRanges::resize(pros, width = 2 * promoter.ext.1side,
                                       fix = "center")
         peaks <- peaks %>% utilsFanc::loci.2.df(loci.vec = ., remove.loci.col = F, return.gr = T)
-        
+
         pros.in.peaks <- pros %>% subsetByOverlaps(peaks, invert = F, ignore.strand = T)
         genes <- pros.in.peaks$gene %>% unique()
-        
+
         if (invert == T) {
           pros.not.in.peaks <- pros %>% subsetByOverlaps(peaks, invert = T, ignore.strand = T)
-          # simply turing invert to TRUE is not good enough. Say one gene has 3 promoters. One of them intersects 
+          # simply turing invert to TRUE is not good enough. Say one gene has 3 promoters. One of them intersects
           # peaks and the other 2 do not.
           genes.not.in.peaks <- pros.not.in.peaks$gene %>% unique()
           genes <- genes.not.in.peaks %>% .[!. %in% genes]
@@ -4621,27 +4712,27 @@ de.filter.by.overlaps <- function(de1, de2, slot, slot.out, promoter.ext.1side =
 }
 
 gene.motif.mat.gen <- function(genes, gtf.gr, peakset, bPreComputedMotifOverlap = F,
-                                  motifs, motif.dir = "~/motifs/homer/sth/each_motif", 
-                                  ext.1side = 50000, out.dir, root.name = NULL, 
+                                  motifs, motif.dir = "~/motifs/homer/sth/each_motif",
+                                  ext.1side = 50000, out.dir, root.name = NULL,
                                print.each.motif = F, threads.motif.overlap = 1) {
-  # returns a gene x motif matrix. mat[1,1] would give the number of motif 1 found within 
+  # returns a gene x motif matrix. mat[1,1] would give the number of motif 1 found within
   # ext.1side of the tss of gene 1
   if (is.null(root.name)) root.name <- basename(out.dir)
   root.name <- paste0(root.name, "_ext", ext.1side)
-  
+
   pros <- gene.promoter.map(genes = genes, gtf.gr = gtf)
   pros.bk <- pros
   pros <- pros + ext.1side
   genes.promoter.not.found <- genes[!genes %in% pros$gene]
-  utilsFanc::write.zip.fanc(pros, paste0(out.dir, "/", root.name, "_pros.bed"), 
+  utilsFanc::write.zip.fanc(pros, paste0(out.dir, "/", root.name, "_pros.bed"),
                             bed.shift = T)
   n.genes.promoter.not.found <- length(genes.promoter.not.found)
-  write(c(n.genes.promoter.not.found, 
-          round(n.genes.promoter.not.found/length(genes), digits = 3), 
-          genes.promoter.not.found), 
+  write(c(n.genes.promoter.not.found,
+          round(n.genes.promoter.not.found/length(genes), digits = 3),
+          genes.promoter.not.found),
         paste0(out.dir, "/", root.name, "_genes_promoter_not_found.txt"),
         sep = "\n")
-  
+
   if (bPreComputedMotifOverlap) {
     utilsFanc::t.stat("Using pre-computed motif overlaps")
     if (is.character(peakset[1])) {
@@ -4657,7 +4748,7 @@ gene.motif.mat.gen <- function(genes, gtf.gr, peakset, bPreComputedMotifOverlap 
       names(motifs) <- make.names(motifs)
       utilsFanc::check.dups(names(motifs), "names(motifs)")
     }
-    
+
     motifs.grl <- utilsFanc::safelapply(names(motifs), function(motif.name) {
       motif <- motifs[motif.name]
       motif.file <- paste0(motif.dir, "/", motif, ".bed")
@@ -4665,14 +4756,14 @@ gene.motif.mat.gen <- function(genes, gtf.gr, peakset, bPreComputedMotifOverlap 
       rtracklayer::import(motif.file)
     }, threads = threads.motif.overlap)
     names(motifs.grl) <- names(motifs)
-    
+
     utilsFanc::t.stat("Overlapping motifs with peaks")
     if (is.character(peakset)) peakset <- utilsFanc::loci.2.gr(peakset)
     utilsFanc::write.zip.fanc(peakset, paste0(out.dir, "/", root.name, "_peakset.bed"),
                               bed.shift = T)
     mcols(peakset) <- NULL
     strand(peakset) <- "*"
-    
+
     mcols <- utilsFanc::safelapply(names(motifs.grl), function(motif.name) {
       motif.gr <- motifs.grl[[motif.name]]
       o <- findOverlaps(peakset, motif.gr, ignore.strand = T)
@@ -4686,73 +4777,73 @@ gene.motif.mat.gen <- function(genes, gtf.gr, peakset, bPreComputedMotifOverlap 
     mcols(peakset) <- mcols %>% as.data.frame()
     saveRDS(peakset, paste0(out.dir, "/", root.name, "_peakset_w_motifs.Rds"))
   }
-  
+
   utilsFanc::t.stat("Summarizing by gene")
   peakset$peak <- utilsFanc::gr.get.loci(peakset)
   pros <- plyranges::join_overlap_left(pros, peakset)
-  
+
   df <- mcols(pros) %>% as.data.frame()
   df <- df[, c("gene", "peak", names(motifs))]
   df <- df[!duplicated(df[, c("gene", "peak")]),]
-  
+
   # there are 2 scenarios that could result in NAs in pros$peak:
   # scenario 1: no overlap between a gene and peaks
-  # scenario 2: usually each gene has multiple promoters in gtf.gr. Some of them overlap peaks 
+  # scenario 2: usually each gene has multiple promoters in gtf.gr. Some of them overlap peaks
   # while others do not.
   # we only remove scenario 2
   df <- df %>% dplyr::arrange(gene, peak) # For each gene, records with peak == NA will appear at the last
   df <- df[!(is.na(df$peak) & duplicated(df$gene)),]
   # now for those that really don't intersect anything, we change NA to zero:
   df[is.na(df$peak), names(motifs)] <- 0
-  
+
   # remove duplicates
   df <- df[!duplicated(paste0(df$gene, "..", df$peak)),]
-  
-  write.table(df, paste0(out.dir, "/", root.name, "_genePeakMotif.tsv"), 
+
+  write.table(df, paste0(out.dir, "/", root.name, "_genePeakMotif.tsv"),
               row.names = F, col.names = T, sep = "\t", quote = F)
-  
+
   # gm: gene.motif
-  
+
   gm.df <- df
   gm.df$motif.total.n <- rowSums(gm.df[, names(motifs)])
   gm.df$bTotalOver0 <- gm.df$motif.total.n > 0
 
-  gm.df <- gm.df %>% dplyr::group_by(gene, bTotalOver0) %>% 
+  gm.df <- gm.df %>% dplyr::group_by(gene, bTotalOver0) %>%
     dplyr::summarise(
       across(-peak, sum),
       peakWmotif = paste0(peak[bTotalOver0], collapse = ","),
-      peakWOmotif = paste0(peak[!bTotalOver0], collapse = ",")) %>% 
+      peakWOmotif = paste0(peak[!bTotalOver0], collapse = ",")) %>%
     dplyr::ungroup() %>% as.data.frame()
   # peakWmotif: it could be peaks or "", when no peaks have motifs
   # peakWOmotif: it could be peaks, "", or NA. "": all peaks have motifs. NA: no peaks around promoter.
   gm.df$peakWOmotif[gm.df$peakWOmotif == "NA"] <- NA
   gm.df$peakWmotif[gm.df$peakWmotif == "" & is.na(gm.df$peakWOmotif)] <- NA
-  
-  gm.df <- gm.df %>% dplyr::group_by(gene) %>% 
-    dplyr::mutate(motif.total.n = NULL, bTotalOver0 = NULL) %>% 
+
+  gm.df <- gm.df %>% dplyr::group_by(gene) %>%
+    dplyr::mutate(motif.total.n = NULL, bTotalOver0 = NULL) %>%
     dplyr::summarise(peakWmotif = paste0(peakWmotif, collapse = ""),
                      peakWOmotif = paste0(peakWOmotif, collapse = ""),
-                     across(-c(peakWmotif, peakWOmotif), sum)) %>% 
+                     across(-c(peakWmotif, peakWOmotif), sum)) %>%
     dplyr::ungroup() %>% as.data.frame()
-  
-  write.table(gm.df, paste0(out.dir, "/", root.name, "_geneMotif.tsv"), 
+
+  write.table(gm.df, paste0(out.dir, "/", root.name, "_geneMotif.tsv"),
               row.names = F, col.names = T, sep = "\t", quote = F)
-  
+
   gm.mat <- gm.df %>% dplyr::mutate(peak = NULL) %>% as.matrix()
-  
-  gm.df.melt <- df %>% dplyr::filter(!is.na(peak)) %>% 
-    reshape2::melt(id.vars = c("gene", "peak"), measure.vars = names(motifs), 
-                   value.name = "n", variable.name = "motif") %>% 
-    dplyr::filter(n > 0) %>% 
-    dplyr::group_by(gene, motif) %>% 
-    dplyr::summarise(peak = paste0(peak, collapse = ","), n = sum(n)) %>% 
+
+  gm.df.melt <- df %>% dplyr::filter(!is.na(peak)) %>%
+    reshape2::melt(id.vars = c("gene", "peak"), measure.vars = names(motifs),
+                   value.name = "n", variable.name = "motif") %>%
+    dplyr::filter(n > 0) %>%
+    dplyr::group_by(gene, motif) %>%
+    dplyr::summarise(peak = paste0(peak, collapse = ","), n = sum(n)) %>%
     dplyr::ungroup() %>% as.data.frame()
   gm.df.melt$motif <- as.character(gm.df.melt$motif)
   # maintains compatibility with the input requirement of de.motif.n()
-  
-  write.table(gm.df.melt, paste0(out.dir, "/", root.name, "_geneMotif_melt.tsv"), 
+
+  write.table(gm.df.melt, paste0(out.dir, "/", root.name, "_geneMotif_melt.tsv"),
               row.names = F, col.names = T, sep = "\t", quote = F)
-  
+
   res <- list(gene.peak.motif.df = df, gene.motif.df = gm.df, gene.motif.df.melt = gm.df.melt,
               gene.motif.mat = gm.mat,
               n.genes.promoter.not.found = length(genes.promoter.not.found),
@@ -4780,20 +4871,20 @@ de.annotate.genes <- function(de, slot = "annot", over.ride = T, gmt.files, gene
       # 6 chr10p11  CKS1BP2
   }) %>% do.call(rbind, .)
   rownames(gmt) <- NULL
-  
+
   utilsFanc::check.intersect(gene.set.names, "gene.set.names", gmt$ont, "gmts")
-  
-  gmt <- gmt %>% dplyr::filter(ont %in% gene.set.names) %>% 
-    dplyr::mutate(gene = toupper(gene)) %>% 
+
+  gmt <- gmt %>% dplyr::filter(ont %in% gene.set.names) %>%
+    dplyr::mutate(gene = toupper(gene)) %>%
     dplyr::rename(gene.uc = gene)
   # gene.uc: gene upper case
   gmt <- unique(gmt)
   # gmt <- gmt %>% split(f = gmt$ont)
-  
+
   if (is.null(names(gene.set.names)))
     names(gene.set.names) <- make.names(gene.set.names)
   name.map <- data.frame(ont = gene.set.names, gs = names(gene.set.names))
-  
+
   de <- lapply(de, function(s2b) {
     genes <- rownames(s2b$bulk.mat)
     if (slot %in% names(s2b)) {
@@ -4809,20 +4900,20 @@ de.annotate.genes <- function(de, slot = "annot", over.ride = T, gmt.files, gene
         }
       }
     }
-    
+
     annot <- data.frame(gene = genes, gene.uc = toupper(genes))
     annot <- dplyr::left_join(annot, gmt, by = "gene.uc")
     annot <- dplyr::left_join(annot, name.map, by = "ont")
     annot <- annot[, c("gene", "gs")]
     names(annot) <- c("gene", "annot")
-    
+
     annot$value <- T
     annot <- unique(annot)
     annot <- reshape2::dcast(annot, formula = gene ~ annot, value.var = "value")
 
     annot <- annot[, colnames(annot) != "NA"]
     annot[is.na(annot)] <- F
-    
+
     if (slot %in% names(s2b)) {
       annot <- dplyr::left_join(s2b[[slot]], annot, by = "gene")
     }
@@ -4834,12 +4925,12 @@ de.annotate.genes <- function(de, slot = "annot", over.ride = T, gmt.files, gene
 
 de.summary.filter.by.annot <- function(de, summary.slot = "summary", annot.slot = "annot", annots = NULL) {
   de <- lapply(de, function(s2b) {
-    utilsFanc::check.intersect(c(annot.slot, summary.slot), "required slots", 
+    utilsFanc::check.intersect(c(annot.slot, summary.slot), "required slots",
                                names(s2b), "names(s2b)")
     if (is.null(annots)) {
       annots <- colnames(s2b[[annot.slot]]) %>% .[!.%in% "gene"]
     }
-    
+
     utilsFanc::check.intersect(annots, "annots",
                                colnames(s2b[[annot.slot]]), "colnames(s2b[[annot.slot]])")
     genes.pass <- s2b[[annot.slot]]$gene[rowSums(s2b[[annot.slot]][, annots, drop = F]) > 0]
@@ -4873,32 +4964,49 @@ de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2",
   de.slot.assert(de = de, slot = slot)
   df <- lapply(de, function(s2b) {
     summ <- s2b[[slot]]
-    data.frame(cluster = s2b$root.name, n = c(summ$n.up,  -1 * summ$n.down), 
+    data.frame(cluster = s2b$root.name, n = c(summ$n.up,  -1 * summ$n.down),
                type = c(up.name, down.name))
   }) %>% do.call(rbind, .)
-  
+
   dir.create(dirname(out.file), showWarnings = F, recursive = T)
-  write.table(df, paste0(tools::file_path_sans_ext(out.file), ".tsv"), 
+  write.table(df, paste0(tools::file_path_sans_ext(out.file), ".tsv"),
               sep = "\t", col.names = T, row.names = F, quote = F)
-  
+
   df$type <- factor(df$type, levels = c(up.name, down.name))
   df$cluster <- factor(df$cluster, levels = rev(names(de)))
-  
+
   p <- ggplot(df, aes(x = n, y = cluster)) +
     geom_bar(aes(fill = type), stat = "identity")
-  
-  
+
+
   color.map <- utilsFanc::color.hue.fc(n = 2, palette = palette.fc)
   names(color.map) <- c(up.name, down.name)
-  
+
   p <- p + scale_fill_manual(values = color.map)
-  
-  p <- p %>% utilsFanc::theme.fc.1(italic.x = F, rotate.x.45 = F) 
-  
-  p <- p + theme(legend.direction = "vertical", 
+
+  p <- p %>% utilsFanc::theme.fc.1(italic.x = F, rotate.x.45 = F)
+
+  p <- p + theme(legend.direction = "vertical",
                  plot.margin = unit(c(0.04, 0.1, 0.01, 0), units = "in"))
-  
+
   ggsave(out.file, p, width = width, height = height, device = cairo_pdf)
   invisible(p)
 }
 
+de.expr.corr <- function(de, comp.df,
+                         color.by = NULL, shape.by = NULL,
+                         plot.out) {
+  # comp.df <- data.frame(x = "Etv2", y = c("Fhl2", "Col3a1"))
+  stop("development aborted")
+  pl <- lapply(de, function(s2b) {
+    utilsFanc::check.intersect(unlist(comp.df), "unlist(comp.df)", s2b$bulkNorm$gene, "s2b$bulkNorm$gene")
+
+    lapply(1:nrow(comp.df), function(i) {
+      comp <- comp.df[i, ]
+      df <- s2b$bulkNorm$gene %>% filter(gene %in% unlist(comp))
+      df <- reshape2::melt(df, id.vars = "gene", variable.name = "sample", value.name = "expr")
+    })
+
+  })
+  invisible(pl)
+}
