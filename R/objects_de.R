@@ -819,7 +819,6 @@ deseq2.xyplot <- function(pbl, publication = F,
             color.map <- highlight.color
             names(color.map) <- "hl"
           }
-
           p <- xy.plot(df = df, x = comp.l$x, y = comp.l$y, transformation = transformation,
                        quantile.limit = quantile.limit, density.filter = density.filter,
                        highlight.var = highlight.var, highlight.values = de.df$gene,
@@ -4958,13 +4957,16 @@ de.print.summary <- function(de, summ.slot = "summary") {
   invisible(NULL)
 }
 
-de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2",
-                            down.name = "down", up.name = "up",
-                            width = 3, height = 3, out.file) {
+de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2", 
+                            add.stripe = F,
+                            flip.downDEG = T,
+                            down.name = "down", up.name = "up", title = NULL,
+                            width = 3, height = 3,
+                            out.file) {
   de.slot.assert(de = de, slot = slot)
   df <- lapply(de, function(s2b) {
     summ <- s2b[[slot]]
-    data.frame(cluster = s2b$root.name, n = c(summ$n.up,  -1 * summ$n.down),
+    data.frame(cluster = s2b$root.name, n = c(summ$n.up,  ifelse(flip.downDEG, -1, 1) * summ$n.down),
                type = c(up.name, down.name))
   }) %>% do.call(rbind, .)
 
@@ -4972,23 +4974,49 @@ de.deg.plot.bar <- function(de, slot = "summary", palette.fc = "R4.fc2",
   write.table(df, paste0(tools::file_path_sans_ext(out.file), ".tsv"),
               sep = "\t", col.names = T, row.names = F, quote = F)
 
-  df$type <- factor(df$type, levels = c(up.name, down.name))
+  df$type <- factor(df$type, levels = rev(c(up.name, down.name)))
   df$cluster <- factor(df$cluster, levels = rev(names(de)))
-
-  p <- ggplot(df, aes(x = n, y = cluster)) +
-    geom_bar(aes(fill = type), stat = "identity")
+  
+  if (flip.downDEG) {
+    position = "stack"
+  } else {
+    position = "dodge"
+  }
+  
+  if (add.stripe){
+    # df$Stripe <- 1
+    library(ggpattern)
+    p <- ggplot(df, aes(x = n, y = cluster)) +
+      geom_col_pattern(aes(fill = type), pattern = "circle", 
+                       pattern_colour = "white",
+                       pattern_fill = "white",
+                       pattern_size = 0.1,
+                       position = position, width = 0.5) + 
+      scale_pattern_identity()
+  } else {
+    p <- ggplot(df, aes(x = n, y = cluster)) +
+      geom_bar(aes(fill = type), stat = "identity", position = position, width = 0.5)
+  }
+  
 
 
   color.map <- utilsFanc::color.hue.fc(n = 2, palette = palette.fc)
   names(color.map) <- c(up.name, down.name)
 
   p <- p + scale_fill_manual(values = color.map)
-
+  
+  if (!is.null(title)) 
+    p <- p + ggtitle(title)
+  
   p <- p %>% utilsFanc::theme.fc.1(italic.x = F, rotate.x.45 = F)
-
+  
   p <- p + theme(legend.direction = "vertical",
-                 plot.margin = unit(c(0.04, 0.1, 0.01, 0), units = "in"))
-
+                 plot.margin = unit(c(0.04, 0.1, 0.04, 0), units = "in")) +
+    theme(plot.title = element_text(hjust = 1, margin = margin(b = 0.05, unit = "in")),
+          legend.text = element_text(margin = margin(b = 0.05, unit = "in")),
+          legend.box.margin = margin(l = -0.2, t = -0.1, unit = "in"))
+  p <- p + guides(fill = guide_legend(reverse = T))
+  
   ggsave(out.file, p, width = width, height = height, device = cairo_pdf)
   invisible(p)
 }
