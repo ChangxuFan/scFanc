@@ -644,7 +644,7 @@ deseq2.xyplot <- function(pbl, publication = F,
                           comp.vec, comp.meta = NULL,
                           transformation = NULL, quantile.limit = NULL,
                           no.highlight = F, highlight.by.overlap.gr = NULL,
-                          highlight.genes = NULL, highlight.color = NULL,
+                          highlight.genes = NULL, highlight.color = "red",
                           density.filter = NULL,
                           add.label = F, label.list = NULL,
                           plotly.label.all = F, plotly.highlight.only = T,
@@ -680,7 +680,6 @@ deseq2.xyplot <- function(pbl, publication = F,
     root.name <- summ.slot
   }
   if (add.label == T) {
-    # warning("currently only support adding labels to all points. use with caution")
     label.var <- "gene"
     if (is.null(label.list)) {
       if (!is.null(highlight.genes)) {
@@ -733,7 +732,7 @@ deseq2.xyplot <- function(pbl, publication = F,
             if (is.null(summ)) {
               stop(paste0("slot '", summ.slot, "' not found"))
             }
-
+            
             de.df <- pbl[[s2b.name]][[pbl.slot]] %>% filter(gene %in% summ$de.genes)
             if (nrow(de.df) == 0) {
               highlight.var <- NULL

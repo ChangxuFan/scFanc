@@ -1196,6 +1196,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
                                                              hjust = "hjust", vjust = "vjust"),
                                         size = text.size, color = text.color, parse = italic.label,
                                         segment.size = 0.2, direction = repel.direction,
+                                        max.overlaps = 100,
                                         min.segment.length = 0)
     } else if (use.geom_text == F) {
       p <- p + geom_label(data = label.df, mapping = aes_string(x = x, y=y, label = label.var,
