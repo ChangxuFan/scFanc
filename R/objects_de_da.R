@@ -125,7 +125,8 @@ de.da.intersect <- function(pbl1, pbl2, name1, name2,
 de.da.intersect.titrate <- function(de, da, slot = "summary", directions = c("up", "down"),
                                     mode = "promoter", promoter.ext.1side = 500, genome.size,
                                     use.background = F, n.folds.bg,
-                                    padj.cutoffs = c(0.05, 0.1, 0.2),
+                                    p.cutoffs = NULL,
+                                    padj.cutoffs = c(0.05, 0.1, 0.2), 
                                     log2FC.cutoffs = c(0, 0.25, 0.5, 1),
                                     out.dir, root.name = NULL, print.details = T) {
 
@@ -154,13 +155,29 @@ de.da.intersect.titrate <- function(de, da, slot = "summary", directions = c("up
   } else {
     stop("Only promoter has been developed")
   }
-
-  res <- lapply(padj.cutoffs, function(padj) {
+  stat.cutoffs <- padj.cutoffs
+  bP <- F
+  stat.flag <- "padj"
+  if (!is.null(p.cutoffs)) {
+    stat.cutoffs <- p.cutoffs
+    # print("Using nominal p values instead of adjusted p values")
+    bP <- T
+    stat.flag <- "pvalue"
+  }
+  
+  res <- lapply(stat.cutoffs, function(stat.cutoff) {
     lapply(log2FC.cutoffs, function(log2FC) {
       if (mode %in% c("promoter")) {
         DAR.dir <- NULL
-        if (print.details) DAR.dir <- paste0(out.dir, "/DARs/DAR_padj", padj, "_log2FC", log2FC, "/")
-        des[[bT]] <- deseq2.summary(des[[bT]], padj.cutoff = padj, log2fc.cutoff = log2FC, summary.slot = slot,
+        if (print.details) DAR.dir <- paste0(out.dir, "/DARs/DAR_", stat.flag, stat.cutoff, "_log2FC", log2FC, "/")
+        
+        p.cutoff <- NULL
+        if (bP) p.cutoff <- stat.cutoff
+        
+        des[[bT]] <- deseq2.summary(des[[bT]],
+                                    padj.cutoff = ifelse(bP, NA, stat.cutoff),
+                                    p.cutoff = p.cutoff,
+                                    log2fc.cutoff = log2FC, summary.slot = slot,
                                     gene.out.dir = DAR.dir)
         res <- lapply(anchor.sets, function(anchor.set) {
           # e.g. for mode == "promoter": da uses the same slot, whereas de uses a different slot for fg or bg
@@ -181,13 +198,17 @@ de.da.intersect.titrate <- function(de, da, slot = "summary", directions = c("up
           if (print.details && !grepl("^fold\\d+$", anchor.set)) {
             details.dir <- paste0(out.dir, "/details/")
           }
-          root.name <- paste0(root.name, "_padj", padj, "_log2FC", log2FC, "_slot", anchor.set)
+
+          root.name <- paste0(root.name, "_", stat.flag, stat.cutoff, "_log2FC", log2FC, "_slot", anchor.set)
+          
 
           res <- de.da.intersect(pbl1 = des$de, pbl2 = des$da, name1 = "de", name2 = "da", slot = anchor.set,
                                  rule = mode, promoter.ext.1side = promoter.ext.1side, out.dir = details.dir,
                                  root.name = root.name,
                                  directions = directions)
-          frame <- data.frame(anchor.set = anchor.set, padj = padj, log2FC = log2FC)
+          frame <- data.frame(anchor.set = anchor.set, padj = stat.cutoff, log2FC = log2FC)
+          colnames(frame)[2] <- stat.flag
+          
           res <- cbind(frame, res)
 
           res <- lapply(1:nrow(res), function(i) {
@@ -253,16 +274,27 @@ de.da.intersect.titrate.plot.venn <- function(in.tsv, out.dir = NULL) {
   if (is.null(out.dir)) {
     out.dir <- paste0(dirname(in.tsv))
   }
-
+  
+  stat.flag <- NULL
+  if ("padj" %in% colnames(res)) stat.flag <- "padj"
+  if ("pvalue" %in% colnames(res)) stat.flag <- "pvalue"
+  
   lapply(1:nrow(res), function(i) {
     res <- res[i, ]
     anchor.set <- res$anchor.set
-    root.name <- paste0(root.name, "_padj", res$padj, "_log2FC", res$log2FC, "_slot_", anchor.set)
+    
+    if (is.null(stat.flag)) {
+      if (nrow(res) > 1)
+        stop("Multiple rows in in.tsv. must have statisticis columns")
+    } else {
+      root.name <- paste0(root.name, "_", stat.flag, res[, stat.flag], "_log2FC", res$log2FC, "_slot_", anchor.set)
+    }
+    
 
     venn.list <- list(DEG = 1, DAR = 1)
     names(venn.list) <- paste0(res$direction, names(venn.list))
     venn.dir <- paste0(out.dir, "/venn/")
-    if (grepl("^fold\\d+$", anchor.set))
+    if (!is.null(anchor.set) && grepl("^fold\\d+$", anchor.set))
       venn.dir <- paste0(venn.dir, "/bg/")
 
     dir.create(venn.dir, showWarnings = F, recursive = T)
@@ -282,7 +314,7 @@ de.da.intersect.titrate.plot.venn <- function(in.tsv, out.dir = NULL) {
       direct.area = T, area.vector = area.vector)
 
     cairo_pdf(filename = out.file, width = 1.2, height = 1.2)
-    try(grid.draw(grobs))
+    try(grid::grid.draw(grobs))
     dev.off()
     return()
   })

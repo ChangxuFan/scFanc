@@ -425,8 +425,8 @@ de.2.rnk <- function(de.grid = NULL, pbl = NULL, microarray.mode = F,
         }) %>% Reduce(union, .)
         df <- df %>% filter(gene %in% top.genes)
       }
-      df <-  df %>% dplyr::select(gene, pvalue, log2FoldChange) %>%
-        dplyr::mutate(log_p = pmin(-log10(pvalue), 8) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>%
+      df <-  df %>% dplyr::select(gene, pvalue, log2FoldChange) %>% 
+        dplyr::mutate(log_p = pmin(-log10(pvalue), logp.max) * (log2FoldChange/abs(log2FoldChange)), gene = toupper(gene), master.ident = name) %>% 
         dplyr::filter(log_p != 0) %>% dplyr::select(gene, log_p, log2FoldChange, master.ident)
       return(df)
     }) %>% Reduce(rbind, .)
@@ -1170,7 +1170,9 @@ msigdb.dotplot <- function(pbl, cat.to.plot,
         rownames(enrich@result) <- enrich@result$ID
       }
 
-      p <- clusterProfiler::dotplot(enrich, showCategory = n,
+      if (nrow(enrich) == 0)
+        return()
+      p <- enrichplot::dotplot(enrich, showCategory = n, 
                    font.size = font.size,
                    title = paste0(s2b$root.name, " ", type))
       return(p)

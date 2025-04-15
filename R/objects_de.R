@@ -985,7 +985,7 @@ deseq2.de.from.density <- function(pbl, comp,
 
 deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
                            rank.by = "padj",
-                           padj.cutoff = 0.05, log2fc.cutoff = 1,
+                           padj.cutoff = 0.05, log2fc.cutoff = 1, p.cutoff = NULL,
                            min.log2.exp = NULL, min.log2.exp.samples,
                            annot = F, annot.genome,
                            exclude = NULL, exclude.by.overlap = F,
@@ -1039,8 +1039,17 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
       }
 
       de.df <- de.df %>% filter(abs(log2FoldChange) > log2fc.cutoff)
+      
       if (is.null(use.topn.p)) {
-        de.df <- de.df %>% filter(padj < padj.cutoff)
+        if (!is.null(p.cutoff)) {
+          print("New function as of 2025-03-27: using nominal p values")
+          de.df <- de.df %>% filter(pvalue < p.cutoff)
+          if (rank.by == "padj") rank.by <- "pvalue"
+          padj.cutoff <- NA
+        } else {
+          de.df <- de.df %>% filter(padj < padj.cutoff)
+        }
+        
       } else {
         de.df <- de.df %>% split(f = de.df$log2FoldChange > 0) %>%
           lapply(function(de.df) {
@@ -1059,6 +1068,7 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
 
       de.df <- de.df %>% dplyr::select(gene, log2FoldChange)
       s2b[[summary.slot]] <- list(padj.cutoff = padj.cutoff,
+                                  p.cutoff = p.cutoff,
                           log2fc.cutoff = log2fc.cutoff,
                           n.de = nrow(de.df),
                           n.up = nrow(de.df %>% filter(log2FoldChange > 0)),
@@ -1110,7 +1120,8 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
     }) %>% Reduce(rbind, .)
     system(paste0("mkdir -p ", dirname(stats.file)))
     write.table(stats, stats.file, row.names = F, col.names = T, sep = "\t", quote = F)
-    deseq2.stats.barplot(stats.df = stats.file, padj.cutoff = padj.cutoff,
+
+    deseq2.stats.barplot(stats.df = stats.file, padj.cutoff = padj.cutoff, p.cutoff = p.cutoff,
                          log2fc.cutoff = log2fc.cutoff, topn.cutoff = use.topn.p)
   }
   return(pbl)
@@ -1119,7 +1130,7 @@ deseq2.summary <- function(pbl, res.slot = "res", summary.slot = "summary",
 
 
 deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters", "Clusters"),
-                                 padj.cutoff = NULL, log2fc.cutoff = NULL, topn.cutoff = NULL,
+                                 padj.cutoff = NULL, log2fc.cutoff = NULL, topn.cutoff = NULL, p.cutoff = NULL,
                                  plot.out = NULL) {
   if (is.character(stats.df)) {
     if (is.null(plot.out)) {
@@ -1141,7 +1152,15 @@ deseq2.stats.barplot <- function(stats.df, cluster.ident.rm = c("seurat_clusters
     geom_bar(stat = 'identity', position = "dodge") +
     geom_text(aes(label = n.genes), position = position_dodge(width = 0.8))
 
-  title <- paste("padj", padj.cutoff, "log2fc", log2fc.cutoff, "topn", topn.cutoff)
+  
+  title <- paste("padj", padj.cutoff, "log2fc", log2fc.cutoff)
+  if (!is.null(topn.cutoff)) {
+    title <- paste0(title, " topn ", topn.cutoff)
+  }
+  if (!is.null(p.cutoff)) {
+    title <- paste0(title, " p ", p.cutoff)
+  }
+  
   p <- p + ggtitle(title)
 
   if (!is.null(plot.out)) {
