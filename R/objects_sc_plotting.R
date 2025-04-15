@@ -1,5 +1,5 @@
 feature.plot.comp <- function(marker.list, obj.list, plot.dir=NULL, n.marker, must.present.in=NULL) {
-
+  
   p.list <- split(marker.list, f = marker.list$cluster) %>%
     lapply(function(x) {
       print(paste0("cluster: ",x$cluster[1]))
@@ -21,7 +21,7 @@ feature.plot.comp <- function(marker.list, obj.list, plot.dir=NULL, n.marker, mu
         ggsave(paste0(plot.dir, "/comp_cluster_", x$cluster[1], ".png"), p, units = "in", dpi = 200,
                width = length(obj.list)*5, height = n.marker*5, device = "png", limitsize = F)
       }
-
+      
       return(p)
     })
 }
@@ -32,11 +32,11 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
                             tooltip = NULL, pdf.by.row = T, pdf.use.cairo = T) {
   # col.row.ratio: in the final "big plot", # columns/# rows.
   # new behaviour: if there are too many plots (>page.limit), separate into multiple plots
-
+  
   if (page.limit < n.split)
     stop("page.limit must be equal to or larger than n.split")
   n.plots <- length(plot.list)
-
+  
   if (!is.null(plot.out) && grepl("(.pdf$)|(.html$)", plot.out)) {
     # if .pdf file is supplied, the multipage mode will be triggered
     system(paste0("mkdir -p ", dirname(plot.out)))
@@ -48,7 +48,7 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
       if (n.col == 0)
         n.col <- n.split
     }
-
+    
     if (grepl("html$", plot.out)) {
       tag.list <- lapply(plot.list, function(p) {
         p.plotly <- suppressWarnings(plotly::ggplotly(p = p, tooltip = tooltip,
@@ -56,7 +56,7 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
                                                       width = sub.width * 100) %>%
                                        plotly::layout(showlegend = FALSE))
         widget <- plotly::as_widget(p.plotly)
-
+        
         tag <- htmltools::div(widget, style = paste0("float:left;width:", floor(100/n.col), "%;"))
         return(tag)
       })
@@ -90,17 +90,17 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
 
       return(NULL)
     }
-
-
+    
+    
   }  else  {
     # first figure our how many pages are necessary:
     page.limit <- floor(page.limit/n.split) * n.split
     n.pages <- (n.plots/page.limit) %>% ceiling()
     split.vec <- ceiling((1:n.plots)/page.limit)
-
+    
     page.list <- plot.list %>% split(f  = split.vec) %>%
       mapply(., unique(split.vec), SIMPLIFY = F, FUN = function(sub.list, id) {
-
+        
         n.sub <- length(sub.list)
         if (is.null(n.col)) {
           n.col <- floor(col.row.ratio*(n.sub/col.row.ratio)^(0.5))
@@ -129,9 +129,9 @@ wrap.plots.fanc <- function(plot.list, n.split=1, plot.out=NULL, n.col=NULL, pag
 
 
 plot.panel.list.bk <- function(panel.list, obj, cluster =NULL, order = T, assay,split.by=NULL,label = T, b2m = T,
-                            n.split=1, ident = "seurat_clusters", plot.out = NULL, violin = F,
-                            to.human = F, limits = NULL, return.list = F, pt.size = 0.05, raster = F,
-                            threads = 1) {
+                               n.split=1, ident = "seurat_clusters", plot.out = NULL, violin = F,
+                               to.human = F, limits = NULL, return.list = F, pt.size = 0.05, raster = F,
+                               threads = 1) {
   cells <- NULL
   if (!is.null(cluster)) {
     cells <- colnames(obj)[obj@meta.data$seurat_clusters %in% cluster]
@@ -143,12 +143,12 @@ plot.panel.list.bk <- function(panel.list, obj, cluster =NULL, order = T, assay,
   if (violin == T)
     n.split <- 1
   all.markers <- panel.list %>% unlist()
-
+  
   avail.genes <- rownames(obj)
   avail.genes <- rbind(avail.genes, colnames(obj@meta.data))
   if (b2m == T)
     all.markers[!all.markers %in% avail.genes] <- "B2m"
-
+  
   if (to.human == T) {
     all.markers <- toupper(all.markers)
   }
@@ -173,17 +173,17 @@ plot.panel.list.bk <- function(panel.list, obj, cluster =NULL, order = T, assay,
         p <- lapply(p, function(p) {
           p <- p + scale_color_gradientn(colors = c("lightgrey", "blue"), limits = limits)
           return(p)
-          })
-
+        })
+        
       }
-
+      
       p <- lapply(p, function(x) return(list(x)))
     }
   }
-
+  
   else {
     p <- mclapply(all.markers, function(m) {
-
+      
       if (violin == T) {
         p.sub <- VlnPlot(obj, m, split.by = split.by,
                          # cols = c("red", "orange", "blue", "green", "gray", "yellow"),
@@ -197,32 +197,32 @@ plot.panel.list.bk <- function(panel.list, obj, cluster =NULL, order = T, assay,
             g <- ggplot_build(psi)
             return(g$plot$scales$scales[[3]]$range$range[[2]])
           }) %>% unlist() %>% max()
-
+          
           limits <- c(0, scale.max)
         }
-
+        
         p.sub <- lapply(p.sub, function(psi) {
           psi <- suppressMessages(psi + ggtitle(m) +
-            scale_color_gradientn(colors = c("lightgrey", "blue"), limits = limits) +
-            theme(axis.title=element_blank(),
-                  axis.text=element_blank(),
-                  axis.ticks=element_blank(),
-                  title = element_text(size = 8),
-                  axis.title.y.right = element_text(color = "blue", size = 8),
-                  legend.key.size = unit(0.3, "cm"),
-                  legend.text = element_text(size = 5)))
+                                    scale_color_gradientn(colors = c("lightgrey", "blue"), limits = limits) +
+                                    theme(axis.title=element_blank(),
+                                          axis.text=element_blank(),
+                                          axis.ticks=element_blank(),
+                                          title = element_text(size = 8),
+                                          axis.title.y.right = element_text(color = "blue", size = 8),
+                                          legend.key.size = unit(0.3, "cm"),
+                                          legend.text = element_text(size = 5)))
           return(psi)
         })
       }
       return(p.sub)
     }, mc.cores = threads)
   }
-
- # print("miao")
+  
+  # print("miao")
   names(p) <- all.markers
-
+  
   if (return.list == F) {
-
+    
     p <- p %>% Reduce(c, .)
     p <- cowplot::plot_grid(plotlist = p, ncol = n.col)
     if (!is.null(plot.out)) {
@@ -563,7 +563,7 @@ plot.panel.list <- function(panel.list, obj, cluster =NULL, sample = NULL, order
 
 
 plot.panel.list.2 <- function(panel.list, obj, cluster=NULL, assay,split.by=NULL,
- n.split=1, ident = "seurat_clusters", plot.out = NULL, violin = F, limits = NULL, ...) {
+                              n.split=1, ident = "seurat_clusters", plot.out = NULL, violin = F, limits = NULL, ...) {
   lapply(c(T, F), function(i) {
     # plot.out.sub <- sub("\\.png", paste0("_", i, ".png"), plot.out)
     plot.out <- paste0(tools::file_path_sans_ext(plot.out), "_", i, ".", tools::file_ext(plot.out))
@@ -585,11 +585,11 @@ plot.panel.list.m <- function(panel.list, obj, cluster=NULL, order, assay, split
     obj <- list(obj)
   }
   n.obj <- length(obj)
-
+  
   # first make sure all arguments are in the correct format
   args.check <- c("cluster", "order", "assay", "split.by", "ident", "to.human", "limits", "pt.size", "raster")
-
-
+  
+  
   params <- lapply(args.check, function(arg) {
     value <- get(arg)
     if (!is.list(value))
@@ -600,9 +600,9 @@ plot.panel.list.m <- function(panel.list, obj, cluster=NULL, order, assay, split
     }
     return(value)
   })
-
+  
   names(params) <- args.check
-
+  
   p.list <- mclapply(1:n.obj, function(i) {
     params.sub <- lapply(params, function(x) return(x[[i]]))
     params.sub <- c(obj = obj[[i]], panel.list = list(panel.list),
@@ -614,7 +614,7 @@ plot.panel.list.m <- function(panel.list, obj, cluster=NULL, order, assay, split
   if (rearrange == T) {
     n.genes <- sapply(p.list, length)
     gene.names <- names(p.list[[1]])
-
+    
     if (length(unique(n.genes)) != 1)
       stop("each so must return the same number of genes")
     n.genes <- unique(n.genes)
@@ -624,27 +624,27 @@ plot.panel.list.m <- function(panel.list, obj, cluster=NULL, order, assay, split
       })
       return(p.list.sub)
     })
-
+    
     names(p.list) <- gene.names
-
+    
   }
-
+  
   p.list.melt <- lapply(p.list, function(x) return(unlist(x, recursive = F)))
   n.split <- sapply(p.list.melt, length)
   if (length(unique(n.split)) != 1)
     stop("error when melting the list: every gene doesn't have the same number of plots associated with it")
   n.split <- unique(n.split)
   p.list.melt.melt <- p.list.melt %>% unlist(recursive = F)
-
+  
   if (!is.null(plot.out)) {
     p <- wrap.plots.fanc(plot.list = p.list.melt.melt, n.split = n.split,
-                             plot.out = plot.out, page.limit = page.limit)
+                         plot.out = plot.out, page.limit = page.limit)
   }
-
+  
   if (return.list == T) {
     return(p.list)
   }
-
+  
   if (return.list.melt == T) {
     return(p.list.melt)
   }
@@ -661,12 +661,12 @@ dimplot.3d <- function(so) {
   umap_1 <- yourseuratobject[["umap"]]@cell.embeddings[,1]
   umap_2 <- yourseuratobject[["umap"]]@cell.embeddings[,2]
   umap_3 <- yourseuratobject[["umap"]]@cell.embeddings[,3]
-
+  
   plot.data <- FetchData(object = yourseuratobject, vars = c("UMAP_1", "UMAP_2", "UMAP_3", "seurat_clusters"))
-
+  
   # Make a column of row name identities (these will be your cell/barcode names)
   plot.data$label <- paste(rownames(plot.data))
-
+  
   # Plot your data, in this example my Seurat object had 21 clusters (0-20)
   plot_ly(data = plot.data,
           x = ~UMAP_1, y = ~UMAP_2, z = ~UMAP_3,
@@ -704,7 +704,7 @@ pc.vln <- function(so, plot.dir, root.name = NULL, dims = NULL, assay, ident="sa
   # dims should be a vector such as 1:30 or c(1,3,4)
   # ... passed to wrap.plots.fanc()
   Idents(so) <- ident
-
+  
   if (is.null(root.name))
     root.name <- so@project.name
   dims.avail <- so@reductions$pca %>% colnames() %>% sub("PC_", "", .) %>% as.numeric()
@@ -714,10 +714,10 @@ pc.vln <- function(so, plot.dir, root.name = NULL, dims = NULL, assay, ident="sa
     dims <- dims.avail
   pl <- lapply(dims, function(x) {
     p <- VlnPlot(object = so, features = paste0("PC_", x), pt.size = 0.5, assay = assay) +
-    stat_summary(fun=median, geom="point", size=3, color="red")
+      stat_summary(fun=median, geom="point", size=3, color="red")
     return(p)
   })
-
+  
   ps <- wrap.plots.fanc(plot.list = pl, col.row.ratio = 1, sub.width = 5, sub.height = 4, dpi = 150,
                         plot.out = paste0(plot.dir, "/", root.name, "_pc_vln_grid_",assay,".png"))
   return()
@@ -757,7 +757,7 @@ hmtp.common.markers <- function(obj, plot.dir, root = "", threads = 1, to.human 
                           plot.out = paste0(plot.dir, "/", root, name), ...))
     return()
   }, threads = threads)
-
+  
   # try(plot.panel.list.2(panel.list[["general"]], obj = obj, assay = "RNA",
   #                   plot.out = paste0(plot.dir, "/panel.png")))
   # try(plot.panel.list.2(panel.list[["cycle"]], obj, assay = "RNA",
@@ -798,12 +798,12 @@ venn.core <- function(x.list, name.vec, fill=NULL) {
     lwd = 1.5,
     # lty = 'blank',
     fill = fill,
-
+    
     # Numbers
     cex = 2,
     fontface = "bold",
     fontfamily = "sans",
-
+    
     # Set names
     cat.cex = 2,
     cat.fontface = "bold",
@@ -820,7 +820,7 @@ multi.venn <- function(x.list.list, name.vec.list=NULL, height.sub = 500, plot.t
                        width.sub = 500, dpi = 150, use.upset = F,debug = F,
                        venn.fill = NULL, outlist = NULL, out.file, mainbar.y.max = NULL,
                        set_size.scale_max = NULL, order.by = c("freq", "degree")) {
-
+  
   n.plots <- length(x.list.list)
   n.col <- sqrt(n.plots) %>% ceiling()
   n.row <- (n.plots/n.col) %>% ceiling()
@@ -847,16 +847,16 @@ multi.venn <- function(x.list.list, name.vec.list=NULL, height.sub = 500, plot.t
   } else {
     venns <- lapply(seq_along(x.list.list),
                     function(i) venn.core(x.list = x.list.list[i], name.vec = name.vec.list[i], fill = venn.fill))
-
+    
   }
-
+  
   if (!is.null(outlist)) {
     out.file <- utilsFanc::plot.name.construct(outlist, sub.name = ifelse(use.upset == T,"_mupset.png","_mvenn.png"))
   }
   png(out.file,
       width = n.col*width.sub,
       height = n.row*height.sub, res = dpi)
-
+  
   try(gridExtra::grid.arrange(grobs = venns,ncol = n.col))
   dev.off()
   return()
@@ -865,18 +865,18 @@ multi.venn <- function(x.list.list, name.vec.list=NULL, height.sub = 500, plot.t
 vln.core.fanc <- function(so, features,group.by = NULL, group.order=NULL, ident, ident.order = NULL,
                           pt.size = 1, assay = NULL, split.by = NULL, adjust = 1, y.max = NULL, same.y.lims = F,
                           slot = "data", split.plot = F, combine = F, outlist=NULL, ...) {
-
+  
   Idents(so) <- ident
-
+  
   if (!is.null(ident.order)) {
-#    so <- so[, so@meta.data[,ident] %in% ident.order]
+    #    so <- so[, so@meta.data[,ident] %in% ident.order]
     so@meta.data[,ident] <- so@meta.data[,ident] %>% factor(levels = ident.order)
   }
-
+  
   if (!is.null(group.order)) {
     so@meta.data[,group.by] <- so@meta.data[,group.by] %>% factor(levels = group.order)
   }
-
+  
   p <- VlnPlot(object = so, pt.size = pt.size, assay = assay, split.by = split.by,
                group.by = group.by, features = features,
                idents = ident.order,
@@ -885,23 +885,24 @@ vln.core.fanc <- function(so, features,group.by = NULL, group.order=NULL, ident,
   p <- lapply(p, function(x) return(
     x +  stat_summary(fun=median, geom="point", size=3, color="red")
   ))
-
+  
   if (length(features) >= 3) {
     features <- features[1:2] %>% c("etc")
   }
   root.name.internal <- paste0("vln_", paste0(features, collapse = ":"))
   sub.name <- paste0("_",ident, "_", paste0(ident.order, collapse = ":"), "_", assay, "_", slot, "_",
-                               group.by, "_", split.by, ".png")
-
-
+                     group.by, "_", split.by, ".png")
+  
+  
   if (!is.null(outlist))
     wrap.plots.fanc(p, plot.out = utilsFanc::plot.name.construct(outlist = outlist, root.name.internal = root.name.internal,
-                                                                         sub.name = sub.name))
+                                                                 sub.name = sub.name))
   return(p)
 }
 
 
-rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
+rank.plot <- function(df, vars, rank.method = "random", na.last = T, transformation = NULL,
+                      use.lines = F,
                       x.limit = c(0, NA), y.limit = c(0, NA), quantile.limit.y = NULL,
                       outfile = NULL, return.df = F,
                       label.var = NULL, labels = NULL, label.size = 4,
@@ -918,10 +919,10 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
     if (!is.null(transformation))
       df.melt$value <- transformation(df.melt$value)
     if (!is.null(rank.method))
-      df.melt$rank <- rank(df.melt$value , ties.method = rank.method)
+      df.melt$rank <- rank(df.melt$value , ties.method = rank.method, na.last = na.last)
     else
       df.melt$rank <- rank(df.melt$value)
-
+    
     df.melt$type <- var
     return(df.melt)
   }) %>% Reduce(rbind, .)
@@ -929,7 +930,13 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
     df.melt <- df.melt %>% filter(value < quantile(df.melt$value, quantile.limit.y))
   }
   p <- ggplot(df.melt, aes(x = rank, y = value, color = type)) +
-    geom_point(size = pt.size, alpha = 0.3) +
+    geom_point(size = pt.size, alpha = 0.3)
+    
+  if (use.lines) {
+    p <- p + geom_line(aes(group = type))
+  }
+  p <- p  +
+    xlim(x.limit) + ylim(y.limit) +
     theme_classic()
   if (!is.null(x.limit)) 
     p <- p + xlim(x.limit)
@@ -940,24 +947,24 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
     label.data <- df.melt
     if (!is.null(labels))
       label.data <- label.data %>% .[.[,label.var] %in% labels,]
-
-    p <- p + ggrepel::geom_text_repel(data = label.data, mapping = aes_string(x = "rank", y = "value",
-                                                               color = "type", label = label.var),
-                                      size = label.size)
+    
+    p <- p + ggrepel::geom_text_repel(
+      data = label.data, mapping = aes_string(x = "rank", y = "value",color = "type", label = label.var),
+      size = label.size)
   }
-
+  
   if (!is.null(add.h.line)) {
     if (!is.null(transformation))
       add.h.line <- transformation(add.h.line)
     p <- p + geom_hline(yintercept = add.h.line)
   }
-
+  
   if (!is.null(add.v.line)) {
     p <- p + geom_vline(xintercept = add.v.line)
   }
   if (!is.null(title))
     p <- p + ggtitle(title)
-
+  
   p <- p + theme(aspect.ratio = 1)
   
   if (publication) {
@@ -980,19 +987,19 @@ rank.plot <- function(df, vars, rank.method = NULL, transformation = NULL,
 density.plot <- function(df, vars, transformation = NULL, x.limit =NULL, y.limit = NULL,
                          outfile = NULL, return.df = F) {
   df.melt <- reshape2::melt(df, measure.vars = vars)
-
+  
   if (!is.null(transformation))
     df.melt$value <- transformation(df.melt$value)
-
+  
   p <- ggplot(df.melt, aes(x = value, fill = variable)) +
     geom_density(alpha = 0.5) +
     theme_classic()
-
+  
   if (!is.null(x.limit))
     p <- p + xlim(x.limit)
   if (!is.null(y.limit))
     p <- p + ylim(y.limit)
-
+  
   if (!is.null(outfile)) {
     trash <- wrap.plots.fanc(plot.list = list(p), plot.out = outfile)
   }
@@ -1031,12 +1038,12 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
     df <- utilsFanc::change.name.fanc(df = df, cols.from = x, cols.to = paste0("X", x))
     x <- paste0("X", x)
   }
-
+  
   if (!suppressWarnings(is.na(as.numeric(y)))) {
     df <- utilsFanc::change.name.fanc(df = df, cols.from = y, cols.to = paste0("X", y))
     y <- paste0("X", y)
   }
-
+  
   if (is.null(transformation.x))
     transformation.x <- transformation
   if (is.null(transformation.y))
@@ -1047,7 +1054,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
     x <- colnames(df) %>% .[grepl(x,.)]
     y <- colnames(df) %>% .[grepl(y,.)]
   }
-
+  
   if (length(x) > 1) {
     if (!is.null(x.lab))
       new.x <- x.lab
@@ -1064,13 +1071,13 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
     df[, new.y] <- df[, y]  %>% collapse.fun()
     y <- new.y
   }
-
-
+  
+  
   if (!is.null(transformation.x))
     df[, x ] <- transformation.x(df[, x])
   if (!is.null(transformation.y))
     df[, y ] <- transformation.y(df[, y])
-
+  
   if (!is.null(density.filter)) {
     df$density <- utilsFanc::getDensity(x = df[, x], y = df[, y])$density
     if (density.filter.2sided == T) {
@@ -1081,7 +1088,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
       df <- df[df$density < quantile(df$density, density.filter),]
     }
   }
-
+  
   if (is.null(color.var)) {
     if (color.density == T) {
       color.var <- "density"
@@ -1091,23 +1098,23 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
       color.var <- ".color"
     }
   }
-
+  
   if (!is.null(quantile.limit)) {
     x.limit <- c(0, quantile(df[, x], quantile.limit))
     y.limit <- c(0, quantile(df[, y], quantile.limit))
   }
-
+  
   if (highlight.only == T) {
     df <- df %>% .[.[, highlight.var] %in% highlight.values, ]
   }
-
+  
   if (!is.null(plotly.var) && plotly.label.all == T)
     p <- ggplot(df, aes_string(x = x, y = y, color = color.var, text = plotly.var))
   else
     p <- ggplot(df, aes_string(x = x, y = y, color = color.var))
-
+  
   # p <- ggplot(df, aes_string(x = x, y = y, color = color.var))
-
+  
   if (raster == T) {
     p <- p + ggrastr::rasterise(geom_point(
         size = pt.size, alpha = 0.5, show.legend=show.color.var, shape = pt.shape,
@@ -1116,32 +1123,32 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
   } else {
     p <- p + geom_point(size = pt.size, alpha = 0.5, show.legend=show.color.var, shape = pt.shape)
   }
-
+  
   if (color.density == T) {
     p <- p + scale_color_gradient(low = "grey70", high = "skyblue1")
   } else if(color.var == ".color") {
     p <- p + scale_color_manual(values = pt.color)
   }
-
-
+  
+  
   if (add.abline ==T ) {
     p <- p + geom_abline(slope = 1, intercept = 0, color = "blue", size = 0.1)
     # updated 2023-03-17: size used to be 2*pt.size
   }
   p <- p +
     theme_classic()
-
-
-
+  
+  
+  
   if (!is.null(x.limit))
     p <- p + xlim(x.limit)
   if (!is.null(y.limit))
     p <- p + ylim(y.limit)
-
+  
   if (add.corr == T) {
     p <- p + ggpubr::stat_cor(show.legend=show.color.var)
   }
-
+  
   if (add.smooth == T) {
     p <- p + geom_smooth(method = smooth.method,show.legend=show.color.var)
   }
@@ -1183,7 +1190,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
     } else {
       label.df <- label.df %>% .[!is.na(.[, label.var]), ]
     }
-
+    
     if (italic.label == T) {
       label.df[, label.var] <- label.df[, label.var] %>% paste0("italic('", ., "')")
     }
@@ -1209,18 +1216,18 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
                          nudge_x = nudge_x, nudge_y = nudge_y, size = text.size, color = text.color,
                          fill = "white", alpha = 0.5, fontface = "bold", label.size = NA,  parse = italic.label)
     }
-
+    
   }
   p <- p + theme(aspect.ratio = 1)
-
+  
   if (show.highlight.color.var == F)
     p <- p + theme(legend.title = element_blank())
-
+  
   if (!is.null(x.lab))
     p <- p + xlab(x.lab)
   if (!is.null(y.lab))
     p <- p + ylab(y.lab)
-
+  
   if (!is.null(add.v.line)) {
     p <- p + geom_vline(xintercept = add.v.line)
   }
@@ -1233,7 +1240,7 @@ xy.plot <- function(df, x, y, is.regex = F, collapse.fun = utilsFanc::pmean, x.l
   if (!is.null(theme.text.size)) {
     p <- p + theme(text = element_text(size = theme.text.size))
   }
-
+  
   if (!is.null(outfile)) {
     trash <- wrap.plots.fanc(plot.list = list(p), plot.out = outfile, tooltip = plotly.var)
   }
@@ -1300,7 +1307,7 @@ mean.sd.plot <- function(mat, use.mean.rank = T, use.diff = F, use.sd.over.mean 
     df$sd <- rowSds(mat)
     measure <- "sd"
   }
-
+  
   if (use.sd.over.mean) {
     measure.old <- measure
     measure <- paste0(measure.old, "_over_mean")
@@ -1308,14 +1315,14 @@ mean.sd.plot <- function(mat, use.mean.rank = T, use.diff = F, use.sd.over.mean 
     if (any(is.na(df[, measure])))
       stop("miao")
   }
-
+  
   if (bLog2p1) {
     df$mean <- log2(df$mean + 1)
     if (!use.sd.over.mean) {
       df[, measure] <- log2(df[, measure] + 1)
     }
   }
-
+  
   df <- df %>% mutate(mean.rank = rank(mean, ties.method = "random"))
   x.use <- ifelse(use.mean.rank, "mean.rank", "mean")
   p <- xy.plot(df = df, x = x.use, y = measure,
@@ -1335,7 +1342,7 @@ chromVAR.ridge <- function(obj, motif.names = NULL, motif.regex = NULL,
     motif.names <- rownames(obj) %>% .[grepl(motif.regex,.)]
   }
   motif.names <- motif.names %>% .[.%in% rownames(obj)]
-
+  
   if (is.null(groups)) {
     groups <- obj[[group.by]] %>% unique()
   }
@@ -1349,7 +1356,7 @@ chromVAR.ridge <- function(obj, motif.names = NULL, motif.regex = NULL,
       mutate(group = factor(group, levels = groups))
     if (assay == "deviations")
       assay <- "raw"
-
+    
     if (use.ridge == T) {
       p <- ggplot(df, aes(x = dev, fill = group, y = group)) +
         ggridges::geom_density_ridges() +
@@ -1374,10 +1381,10 @@ chromVAR.ridge <- function(obj, motif.names = NULL, motif.regex = NULL,
     sub.width <- 6
     sub.height <- 5
   }
-
+  
   trash <- wrap.plots.fanc(plot.list = pl, plot.out = plot.out, sub.width = sub.width,
-                  sub.height = sub.height)
-
+                           sub.height = sub.height)
+  
 }
 
 cluster.composition.bar <- function(obj, cluster.ident, clusters = NULL, split.by, split.order = NULL,
@@ -1392,8 +1399,8 @@ cluster.composition.bar <- function(obj, cluster.ident, clusters = NULL, split.b
     df <- df[df[, split.by] %in% split.order,]
     df[, split.by] <-  df[, split.by] %>% as.character() %>% factor(., levels = split.order)
   }
-
-
+  
+  
   if (is.null(plot.by)) {
     plot.by <- "composition"
     df$composition <- "composition"
@@ -1402,15 +1409,15 @@ cluster.composition.bar <- function(obj, cluster.ident, clusters = NULL, split.b
     df <- df[df[, plot.by] %in% plot.order,]
     df[, plot.by] <-  df[, plot.by] %>% as.character() %>% factor(., levels = plot.order)
   }
-
+  
   df <- df[!is.na(df[, split.by]),]
   df <- df[!is.na(df[, cluster.ident]),]
   df <- df[!is.na(df[, plot.by]),]
-
+  
   # browser()
   pl <- df %>% split(., f = .[, plot.by]) %>%
     lapply(function(df2) {
-
+      
       df3 <- df2 %>% group_by(!!as.name(split.by), !!as.name(cluster.ident)) %>%
         summarise(n = n()) %>% ungroup()
       if (standardize == T) {
@@ -1433,20 +1440,20 @@ chromVAR.umap <- function(ao, motif.mat.name, impute.weights = getImputeWeights(
   motifs <- getFeatures(ao, useMatrix = motif.mat.name)
   if (!is.null(motifs.regex))
     motifs <- motifs %>% .[grepl(motifs.regex, .)]
-
+  
   if (!is.null(motifs.use)) {
     motifs <- motifs %>% .[.%in% motifs.use]
     if (sort.by.motifs.use == T) {
       motifs <- utilsFanc::sort.by(motifs, motifs.use)
     }
   }
-
-
+  
+  
   if (!is.null(n)) {
     if (length(motifs) > n)
       motifs <- motifs[1:n]
   }
-
+  
   p <- plotEmbedding(
     ArchRProj = ao,
     colorBy = motif.mat.name,
@@ -1467,7 +1474,7 @@ chromVAR.umap <- function(ao, motif.mat.name, impute.weights = getImputeWeights(
       ) +
       theme(legend.key.height = unit(0.2, 'cm'))
   })
-
+  
   trash <- wrap.plots.fanc(plot.list = p, plot.out = plot.out, page.limit = 16, n.col = 4)
   return()
 }
@@ -1480,14 +1487,14 @@ save.base.plot <- function(p = NULL, exp, file,
   } else if (grepl("pdf$", file)) {
     cairo_pdf(file = file, width = width/res, height = height/res)
   }
-
+  
   try({
     if (is.null(p))
       print(eval(substitute(exp)))
     else
       print(p)
   })
-
+  
   dev.off()
 }
 
@@ -1521,11 +1528,11 @@ plot.motif.logo <- function(motif.names = NULL, arche.names, map = ARCHETYPE.MAP
     })
     return(pl)
   }, threads = threads)
-
+  
   if (return.plot.list) {
     return(pl)
   }
-
+  
   if (enforce.same.row == T) {
     pl <- lapply(pl, function(x) {
       if (length(x) > max.col) {
@@ -1545,9 +1552,9 @@ plot.motif.logo <- function(motif.names = NULL, arche.names, map = ARCHETYPE.MAP
   } else {
     n.col <- NULL
   }
-
+  
   pl <- unlist(pl, recursive = F)
-
+  
   p <- wrap.plots.fanc(pl, n.col = n.col, page.limit = 100, sub.height = 2, sub.width = 8,
                        plot.out = plot.out)
   invisible(p)
@@ -1613,7 +1620,7 @@ dim.plot.simple <- function(so, plot.out = NULL, group.by = "seurat_clusters", l
     dir.create(dirname(plot.out), showWarnings = F, recursive = T)
     ggsave(filename = plot.out,plot = p, width = 5, height = 5, units = "in", dpi = 100)
   }
-
+  
   return(p)
 }
 
@@ -1700,7 +1707,7 @@ rank.plot.synced <- function(df, rank.by = NULL, bDescending = T,
   pl <- lapply(rank.by, function(rank.by.sub) {
     order <- order(df[, rank.by.sub])
     if (bDescending)
-        order <- rev(order)
+      order <- rev(order)
     df <- df[order, ]
     df$rank <- 1:nrow(df)
     df <- reshape2::melt(df, id.vars = "rank", variable.name = "var", value.name = "value")
@@ -1735,13 +1742,13 @@ umap.axis.schema <- function(p, x.slot = "UMAP_1", y.slot = "UMAP_2",
                         inherit.aes = F,
                         size = line.size)
   dt <- data.frame(x = c(x.range[1] + (x.shift.pct + 0.05) * x.len, x.range[1]), 
-                  y = c(y.range[1], y.range[1] + (y.shift.pct + 0.05) * y.len),
-                  # hjust = c(-1 * x.text.nudge, x.shift.pct * 0.5),
-                  # vjust = c(y.shift.pct * 0.5, y.text.nudge),
-                  hjust = c(0, 0), 
-                  vjust = c(0, 1),
-                  angle = c(0, 90),
-                  label = c(x.slot, y.slot))
+                   y = c(y.range[1], y.range[1] + (y.shift.pct + 0.05) * y.len),
+                   # hjust = c(-1 * x.text.nudge, x.shift.pct * 0.5),
+                   # vjust = c(y.shift.pct * 0.5, y.text.nudge),
+                   hjust = c(0, 0), 
+                   vjust = c(0, 1),
+                   angle = c(0, 90),
+                   label = c(x.slot, y.slot))
   # hjust and vjust: for UMAP_1, position determined by lower left corner
   # for UMAP_2, position determined by upper left corner
   # then UMAP_2 gets rotated 90 degrees. Note we first determine its position, before rotating!
@@ -2037,6 +2044,7 @@ cluster.freq.bar <- function(soi, x, xs = NULL, group.by, groups = NULL,
     plot.df$group.by <- factor(plot.df$group.by, rev(groups))
   }
   
+
   p <- ggplot(plot.df, aes(x = x, y = pct)) +
     geom_bar(aes(fill = group.by), stat = "identity", show.legend = !publication)
   
